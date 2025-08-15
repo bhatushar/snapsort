@@ -1,14 +1,11 @@
 <script lang="ts">
 	import type { PageProps } from './$types';
 	import { enhance } from '$app/forms';
-	import { removeDuplicatesPredicate } from '$lib/utility';
-	import IconClose from '~icons/material-symbols/close';
 	import Loader from '$lib/components/loader.svelte';
+	import NoticeModal from '$lib/components/notice-modal.svelte';
 
 	let { form }: PageProps = $props();
-	let showErrorsModal = $derived<boolean>((form?.errors?.length ?? 0) !== 0);
-	let showSuccessModal = $derived<boolean>((form?.messages?.length ?? 0) !== 0);
-	let loadingState = $state(false);
+	let showLoader = $state(false);
 </script>
 
 <svelte:head>
@@ -16,9 +13,7 @@
 </svelte:head>
 
 <section class="relative h-screen">
-	{#if loadingState}
-		<Loader />
-	{/if}
+	<Loader {showLoader} />
 
 	<nav class="sticky top-0 z-10 flex h-16 items-center justify-between bg-black px-5 py-1">
 		<!-- Logo -->
@@ -31,10 +26,10 @@
 				method="POST"
 				action="?/changePassword"
 				use:enhance={() => {
-					loadingState = true;
+					showLoader = true;
 					return async ({ update }) => {
 						await update();
-						loadingState = false;
+						showLoader = false;
 					};
 				}}
 				class="mx-4 grid grid-cols-3 items-center gap-4 py-4"
@@ -53,52 +48,6 @@
 	</div>
 </section>
 
-<!-- Form errors -->
-{#if showErrorsModal}
-	<section class="fixed inset-0 z-50 flex flex-col">
-		<button
-			aria-label="close-errors-modal"
-			class="grow bg-black/70"
-			onclick={() => (showErrorsModal = false)}
-		></button>
-		<div class="bg-red-200 px-4 py-2 text-red-950">
-			<div class="mb-2 flex justify-between">
-				<span class="text-xl font-bold">Something went wrong:</span>
-				<button onclick={() => (showErrorsModal = false)} class="cursor-pointer text-xl font-bold">
-					<IconClose />
-				</button>
-			</div>
-			<hr />
-			<ul class="mt-2 px-2">
-				{#each form?.errors?.filter(removeDuplicatesPredicate) ?? [] as error, i (i)}
-					<li class="my-2">{error}</li>
-				{/each}
-			</ul>
-		</div>
-	</section>
-{/if}
-
 <!-- Form result -->
-{#if showSuccessModal}
-	<section class="fixed inset-0 z-50 flex flex-col">
-		<button
-			aria-label="close-errors-modal"
-			class="grow bg-black/70"
-			onclick={() => (showSuccessModal = false)}
-		></button>
-		<div class="bg-green-200 px-4 py-2 text-green-950">
-			<div class="mb-2 flex justify-between">
-				<span class="text-xl font-bold">Alert:</span>
-				<button onclick={() => (showSuccessModal = false)} class="cursor-pointer text-xl font-bold">
-					<IconClose />
-				</button>
-			</div>
-			<hr />
-			<ul class="mt-2 px-2">
-				{#each form?.messages?.filter(removeDuplicatesPredicate) ?? [] as error, i (i)}
-					<li class="my-2">{error}</li>
-				{/each}
-			</ul>
-		</div>
-	</section>
-{/if}
+<NoticeModal modalType="error" messages={form?.errors ?? []} />
+<NoticeModal modalType="success" messages={form?.messages ?? []} />

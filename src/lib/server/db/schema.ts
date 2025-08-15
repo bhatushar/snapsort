@@ -1,15 +1,6 @@
-import {
-	pgTable,
-	serial,
-	text,
-	integer,
-	doublePrecision,
-	check,
-	boolean,
-	timestamp,
-	primaryKey
-} from 'drizzle-orm/pg-core';
+import { sqliteTable, integer, text, real, check, primaryKey } from 'drizzle-orm/sqlite-core';
 import { relations, sql } from 'drizzle-orm';
+import { KeywordCategories } from '../../types'; // $lib module is not accessible to drizzle-kit
 
 /**
  * Database table definition for user authentication.
@@ -19,7 +10,7 @@ import { relations, sql } from 'drizzle-orm';
  * Columns:
  * - `password`: Text field containing password hash.
  */
-export const authTable = pgTable('auth', {
+export const authTable = sqliteTable('auth', {
 	password: text('password').notNull()
 });
 
@@ -28,10 +19,10 @@ export const authTable = pgTable('auth', {
  *
  * Columns:
  * - `id`: Serial primary key.
- * - `country`: Unique country names.
+ * - `name`: Unique country names.
  */
-export const countriesTable = pgTable('countries', {
-	id: serial('id').primaryKey(),
+export const countriesTable = sqliteTable('countries', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
 	name: text('name').notNull().unique()
 });
 
@@ -40,10 +31,10 @@ export const countriesTable = pgTable('countries', {
  *
  * Columns:
  * - `id`: Serial primary key.
- * - `state`: Unique state names.
+ * - `name`: Unique state names.
  */
-export const statesTable = pgTable('states', {
-	id: serial('id').primaryKey(),
+export const statesTable = sqliteTable('states', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
 	name: text('name').notNull().unique()
 });
 
@@ -52,10 +43,10 @@ export const statesTable = pgTable('states', {
  *
  * Columns:
  * - `id`: Serial primary key.
- * - `city`: Unique city names.
+ * - `name`: Unique city names.
  */
-export const citiesTable = pgTable('cities', {
-	id: serial('id').primaryKey(),
+export const citiesTable = sqliteTable('cities', {
+	id: integer('id').primaryKey({ autoIncrement: true }),
 	name: text('name').notNull().unique()
 });
 
@@ -74,10 +65,10 @@ export const citiesTable = pgTable('cities', {
  * - `longitude`: GPS longitude, range -180 to 180. Negative value indicates South, positive indicates North.
  * - `altitude`: Optional GPS altitude. Negative value indicates below sea-level, positive indicates above sea-level.
  */
-export const locationsTable = pgTable(
+export const locationsTable = sqliteTable(
 	'locations',
 	{
-		id: serial('id').primaryKey(),
+		id: integer('id').primaryKey({ autoIncrement: true }),
 		cityId: integer('city_id').references(() => citiesTable.id, {
 			onDelete: 'restrict',
 			onUpdate: 'cascade'
@@ -89,12 +80,15 @@ export const locationsTable = pgTable(
 		countryId: integer('country_id')
 			.notNull()
 			.references(() => countriesTable.id, { onDelete: 'restrict', onUpdate: 'cascade' }),
-		latitude: doublePrecision('latitude').notNull(),
-		longitude: doublePrecision('longitude').notNull(),
-		altitude: doublePrecision('altitude')
+		latitude: real('latitude').notNull(),
+		longitude: real('longitude').notNull(),
+		altitude: real('altitude')
 	},
 	(table) => [
-		check('city_no_state_check', sql`(${table.stateId} IS NOT NULL) OR (${table.cityId} IS NULL)`),
+		check(
+			'city_without_state_check',
+			sql`(${table.stateId} IS NOT NULL) OR (${table.cityId} IS NULL)`
+		),
 		check('latitude_min_check', sql`${table.latitude} >= -90.0`),
 		check('latitude_max_check', sql`${table.latitude} <= 90.0`),
 		check('longitude_min_check', sql`${table.longitude} >= -180.0`),
@@ -114,15 +108,13 @@ export const locationsTable = pgTable(
  * - `isFolderLabel`: Indicates whether the keyword can be used to label a file's parent folder.
  * - `locationId`: Reference to a location. Defined if and only if the category is 'Location'.
  */
-export const keywordsTable = pgTable(
+export const keywordsTable = sqliteTable(
 	'keywords',
 	{
-		id: serial('id').primaryKey(),
+		id: integer('id').primaryKey({ autoIncrement: true }),
 		keyword: text('keyword').notNull().unique(),
-		category: text('category', {
-			enum: ['Album', 'Group', 'Location', 'Person', 'Animal', 'Other']
-		}).notNull(),
-		isFolderLabel: boolean('is_folder_label').notNull().default(false),
+		category: text('category', { enum: KeywordCategories }).notNull(),
+		isFolderLabel: integer('is_folder_label', { mode: 'boolean' }).notNull().default(false),
 		locationId: integer('location_id').references(() => locationsTable.id, {
 			onDelete: 'restrict',
 			onUpdate: 'cascade'
@@ -145,7 +137,7 @@ export const keywordsTable = pgTable(
  * - `path`: Path to the file relative to the library root. Does not contain the file name.
  * - `mimeType`: MIME type of the file. Must be an image or a video.
  * - `captureDateTime`: UTC timestamp of when the file was captured.
- * - `timezone`: Timezone associated with the capture date and time.
+ * - `timezone`: IANA timezone associated with the capture date and time.
  * - `title`: Optional title/description for the file.
  * - `latitude`: GPS latitude where the file was captured. Should only be defined if the file is associated with a location-based keyword.
  * - `longitude`: GPS longitude where the file was captured. Should only be defined if the file is associated with a location-based keyword.
@@ -154,20 +146,20 @@ export const keywordsTable = pgTable(
  * GPS coordinates are stored on a per-file basis, instead of using the default GPS coordinates of the associated
  * keywords. This is done to prioritize the GPS coordinates written by the device when capturing the file.
  */
-export const libraryFilesTable = pgTable(
+export const libraryFilesTable = sqliteTable(
 	'library_files',
 	{
-		id: serial('id').primaryKey(),
+		id: integer('id').primaryKey({ autoIncrement: true }),
 		name: text('name').notNull(),
 		path: text('path').notNull(),
 		mimeType: text('mime_type').notNull(),
 		// Store dates in UTC time, but display them in the associated timezone.
-		captureDateTime: timestamp('capture_date_time', { mode: 'date' }).notNull(),
+		captureDateTime: integer('capture_date_time', { mode: 'timestamp' }).notNull(),
 		timezone: text('timezone').notNull(),
 		title: text('title'),
-		latitude: doublePrecision('latitude'),
-		longitude: doublePrecision('longitude'),
-		altitude: doublePrecision('altitude')
+		latitude: real('latitude'),
+		longitude: real('longitude'),
+		altitude: real('altitude')
 	},
 	(table) => [
 		check(
@@ -195,7 +187,7 @@ export const libraryFilesTable = pgTable(
  * - `fileId`: Reference to the library file.
  * - `keywordId`: Reference to a keyword.
  */
-export const libraryFilesToKeywordsTable = pgTable(
+export const libraryFilesToKeywordsTable = sqliteTable(
 	'library_files_to_keywords',
 	{
 		fileId: integer('file_id')
@@ -215,9 +207,10 @@ export const libraryFilesToKeywordsTable = pgTable(
  * - `id`: Serial primary key.
  * - `name`: Original name of the file.
  * - `path`: Absolute path to the file.
+ * - `thumbnailPath`: Absolute path to the thumbnail.
  * - `mimeType`: MIME type of the file. Must be an image or a video.
  * - `captureDateTime`: Nullable UTC timestamp of when the file was captured.
- * - `timezone`: Nullable timezone associated with the capture date and time.
+ * - `timezone`: Nullable IANA timezone associated with the capture date and time.
  * - `title`: Optional title/description for the file.
  * - `latitude`: Nullable GPS latitude where the file was captured.
  * - `longitude`: Nullable GPS longitude where the file was captured.
@@ -226,21 +219,21 @@ export const libraryFilesToKeywordsTable = pgTable(
  * GPS coordinates are stored on a per-file basis, instead of using the default GPS coordinates of the associated
  * keywords. This is done to prioritize the GPS coordinates written by the device when capturing the file.
  */
-export const queuedFilesTable = pgTable(
+export const queuedFilesTable = sqliteTable(
 	'queued_files',
 	{
-		id: serial('id').primaryKey(),
+		id: integer('id').primaryKey({ autoIncrement: true }),
 		name: text('name').notNull(),
 		path: text('path').notNull(),
 		thumbnailPath: text('thumbnail_path').notNull(),
 		mimeType: text('mime_type').notNull(),
 		// Store dates in UTC time, but display them in the associated timezone.
-		captureDateTime: timestamp('capture_date_time', { mode: 'date' }),
+		captureDateTime: integer('capture_date_time', { mode: 'timestamp' }),
 		timezone: text('timezone'),
 		title: text('title'),
-		latitude: doublePrecision('latitude'),
-		longitude: doublePrecision('longitude'),
-		altitude: doublePrecision('altitude')
+		latitude: real('latitude'),
+		longitude: real('longitude'),
+		altitude: real('altitude')
 	},
 	(table) => [
 		check(
@@ -261,7 +254,7 @@ export const queuedFilesTable = pgTable(
  * - `fileId`: Reference to the queued file.
  * - `keywordId`: Reference to a keyword.
  */
-export const queuedFilesToKeywordsTable = pgTable(
+export const queuedFilesToKeywordsTable = sqliteTable(
 	'queued_files_to_keywords',
 	{
 		fileId: integer('file_id')
@@ -276,11 +269,11 @@ export const queuedFilesToKeywordsTable = pgTable(
 
 /* SECTION: Relation mappings used by Drizzle */
 
-export const citiesRelations = relations(citiesTable, ({ one, many }) => ({
+export const citiesRelations = relations(citiesTable, ({ many }) => ({
 	locations: many(locationsTable)
 }));
 
-export const statesRelations = relations(statesTable, ({ one, many }) => ({
+export const statesRelations = relations(statesTable, ({ many }) => ({
 	locations: many(locationsTable)
 }));
 

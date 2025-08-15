@@ -24,11 +24,3 @@ export const isValueSet = (value: unknown) =>
 export const removeDuplicatesPredicate = <T>(value: T, index: number, array: T[]) => {
 	return array.indexOf(value) === index;
 };
-
-export const regexPatterns = {
-	exifDateTime: /^(\d{4}:\d{2}:\d{2}) (\d{2}:\d{2}:\d{2})$/,
-	exifDateTimeOffset: /^(\d{4}:\d{2}:\d{2}) (\d{2}:\d{2}:\d{2})([+-]\d{2}:\d{2})$/,
-	exifTimezoneOffset: /^([+-]\d{2}:\d{2})$/,
-	exifDateTimeOptionalOffset: /^(\d{4}:\d{2}:\d{2}) (\d{2}:\d{2}:\d{2})([+-]\d{2}:\d{2})?$/,
-	gpsCoordinates: /^([+-]?\d{1,2}(?:\.\d+)?) ([+-]?\d{1,3}(?:\.\d*)?)(?: ([+-]?\d+(?:\.\d+)?))?$/
-};

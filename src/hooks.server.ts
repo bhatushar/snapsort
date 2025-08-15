@@ -1,4 +1,4 @@
-import { mkdir } from 'fs/promises';
+import fs from 'fs/promises';
 import { FILE_UPLOAD_DIR, LIBRARY_ROOT_DIR } from '$env/static/private';
 import path from 'path';
 import { type Handle, redirect } from '@sveltejs/kit';
@@ -6,9 +6,8 @@ import jwt from 'jsonwebtoken';
 import { env } from '$env/dynamic/private';
 
 // Create the necessary directories on server start
-await mkdir(FILE_UPLOAD_DIR, { recursive: true });
-await mkdir(path.join(FILE_UPLOAD_DIR, 'thumb'), { recursive: true });
-await mkdir(LIBRARY_ROOT_DIR, { recursive: true });
+const appDirs = [FILE_UPLOAD_DIR, path.join(FILE_UPLOAD_DIR, 'thumb'), LIBRARY_ROOT_DIR];
+await Promise.all(appDirs.map(async (dir) => await fs.mkdir(dir, { recursive: true })));
 
 // Generate random JWT secret on app start
 env.JWT_SECRET_KEY = crypto

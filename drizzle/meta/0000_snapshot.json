@@ -1,0 +1,613 @@
+{
+	"version": "6",
+	"dialect": "sqlite",
+	"id": "58ca8e9f-a261-4d15-88f8-f333afaa8b5d",
+	"prevId": "00000000-0000-0000-0000-000000000000",
+	"tables": {
+		"auth": {
+			"name": "auth",
+			"columns": {
+				"password": {
+					"name": "password",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		},
+		"cities": {
+			"name": "cities",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "integer",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": true
+				},
+				"name": {
+					"name": "name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				}
+			},
+			"indexes": {
+				"cities_name_unique": {
+					"name": "cities_name_unique",
+					"columns": ["name"],
+					"isUnique": true
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		},
+		"countries": {
+			"name": "countries",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "integer",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": true
+				},
+				"name": {
+					"name": "name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				}
+			},
+			"indexes": {
+				"countries_name_unique": {
+					"name": "countries_name_unique",
+					"columns": ["name"],
+					"isUnique": true
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		},
+		"keywords": {
+			"name": "keywords",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "integer",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": true
+				},
+				"keyword": {
+					"name": "keyword",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"category": {
+					"name": "category",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"is_folder_label": {
+					"name": "is_folder_label",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": false
+				},
+				"location_id": {
+					"name": "location_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				}
+			},
+			"indexes": {
+				"keywords_keyword_unique": {
+					"name": "keywords_keyword_unique",
+					"columns": ["keyword"],
+					"isUnique": true
+				}
+			},
+			"foreignKeys": {
+				"keywords_location_id_locations_id_fk": {
+					"name": "keywords_location_id_locations_id_fk",
+					"tableFrom": "keywords",
+					"tableTo": "locations",
+					"columnsFrom": ["location_id"],
+					"columnsTo": ["id"],
+					"onDelete": "restrict",
+					"onUpdate": "cascade"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {
+				"location_check": {
+					"name": "location_check",
+					"value": "(\"keywords\".\"category\" = 'Location' AND \"keywords\".\"location_id\" IS NOT NULL) OR (\"keywords\".\"category\" != 'Location' AND \"keywords\".\"location_id\" IS NULL)"
+				}
+			}
+		},
+		"library_files": {
+			"name": "library_files",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "integer",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": true
+				},
+				"name": {
+					"name": "name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"path": {
+					"name": "path",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"mime_type": {
+					"name": "mime_type",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"capture_date_time": {
+					"name": "capture_date_time",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"timezone": {
+					"name": "timezone",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"title": {
+					"name": "title",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"latitude": {
+					"name": "latitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"longitude": {
+					"name": "longitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"altitude": {
+					"name": "altitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {
+				"mime_type_check": {
+					"name": "mime_type_check",
+					"value": "(\"library_files\".\"mime_type\" LIKE 'image/%') OR (\"library_files\".\"mime_type\" LIKE 'video/%')"
+				},
+				"lat_long_check": {
+					"name": "lat_long_check",
+					"value": "(\"library_files\".\"latitude\" IS NULL AND \"library_files\".\"longitude\" IS NULL) OR (\"library_files\".\"latitude\" IS NOT NULL AND \"library_files\".\"longitude\" IS NOT NULL)"
+				},
+				"altitude_check": {
+					"name": "altitude_check",
+					"value": "(\"library_files\".\"latitude\" IS NOT NULL) OR (\"library_files\".\"altitude\" IS NULL)"
+				},
+				"latitude_min_check": {
+					"name": "latitude_min_check",
+					"value": "\"library_files\".\"latitude\" >= -90.0"
+				},
+				"latitude_max_check": {
+					"name": "latitude_max_check",
+					"value": "\"library_files\".\"latitude\" <= 90.0"
+				},
+				"longitude_min_check": {
+					"name": "longitude_min_check",
+					"value": "\"library_files\".\"longitude\" >= -180.0"
+				},
+				"longitude_max_check": {
+					"name": "longitude_max_check",
+					"value": "\"library_files\".\"longitude\" <= 180.0"
+				}
+			}
+		},
+		"library_files_to_keywords": {
+			"name": "library_files_to_keywords",
+			"columns": {
+				"file_id": {
+					"name": "file_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"keyword_id": {
+					"name": "keyword_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {
+				"library_files_to_keywords_file_id_library_files_id_fk": {
+					"name": "library_files_to_keywords_file_id_library_files_id_fk",
+					"tableFrom": "library_files_to_keywords",
+					"tableTo": "library_files",
+					"columnsFrom": ["file_id"],
+					"columnsTo": ["id"],
+					"onDelete": "cascade",
+					"onUpdate": "cascade"
+				},
+				"library_files_to_keywords_keyword_id_keywords_id_fk": {
+					"name": "library_files_to_keywords_keyword_id_keywords_id_fk",
+					"tableFrom": "library_files_to_keywords",
+					"tableTo": "keywords",
+					"columnsFrom": ["keyword_id"],
+					"columnsTo": ["id"],
+					"onDelete": "restrict",
+					"onUpdate": "cascade"
+				}
+			},
+			"compositePrimaryKeys": {
+				"library_files_to_keywords_file_id_keyword_id_pk": {
+					"columns": ["file_id", "keyword_id"],
+					"name": "library_files_to_keywords_file_id_keyword_id_pk"
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		},
+		"locations": {
+			"name": "locations",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "integer",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": true
+				},
+				"city_id": {
+					"name": "city_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"state_id": {
+					"name": "state_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"country_id": {
+					"name": "country_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"latitude": {
+					"name": "latitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"longitude": {
+					"name": "longitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"altitude": {
+					"name": "altitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {
+				"locations_city_id_cities_id_fk": {
+					"name": "locations_city_id_cities_id_fk",
+					"tableFrom": "locations",
+					"tableTo": "cities",
+					"columnsFrom": ["city_id"],
+					"columnsTo": ["id"],
+					"onDelete": "restrict",
+					"onUpdate": "cascade"
+				},
+				"locations_state_id_states_id_fk": {
+					"name": "locations_state_id_states_id_fk",
+					"tableFrom": "locations",
+					"tableTo": "states",
+					"columnsFrom": ["state_id"],
+					"columnsTo": ["id"],
+					"onDelete": "restrict",
+					"onUpdate": "cascade"
+				},
+				"locations_country_id_countries_id_fk": {
+					"name": "locations_country_id_countries_id_fk",
+					"tableFrom": "locations",
+					"tableTo": "countries",
+					"columnsFrom": ["country_id"],
+					"columnsTo": ["id"],
+					"onDelete": "restrict",
+					"onUpdate": "cascade"
+				}
+			},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {
+				"city_without_state_check": {
+					"name": "city_without_state_check",
+					"value": "(\"locations\".\"state_id\" IS NOT NULL) OR (\"locations\".\"city_id\" IS NULL)"
+				},
+				"latitude_min_check": {
+					"name": "latitude_min_check",
+					"value": "\"locations\".\"latitude\" >= -90.0"
+				},
+				"latitude_max_check": {
+					"name": "latitude_max_check",
+					"value": "\"locations\".\"latitude\" <= 90.0"
+				},
+				"longitude_min_check": {
+					"name": "longitude_min_check",
+					"value": "\"locations\".\"longitude\" >= -180.0"
+				},
+				"longitude_max_check": {
+					"name": "longitude_max_check",
+					"value": "\"locations\".\"longitude\" <= 180.0"
+				}
+			}
+		},
+		"queued_files": {
+			"name": "queued_files",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "integer",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": true
+				},
+				"name": {
+					"name": "name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"path": {
+					"name": "path",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"thumbnail_path": {
+					"name": "thumbnail_path",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"mime_type": {
+					"name": "mime_type",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"capture_date_time": {
+					"name": "capture_date_time",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"timezone": {
+					"name": "timezone",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"title": {
+					"name": "title",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"latitude": {
+					"name": "latitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"longitude": {
+					"name": "longitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				},
+				"altitude": {
+					"name": "altitude",
+					"type": "real",
+					"primaryKey": false,
+					"notNull": false,
+					"autoincrement": false
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {
+				"mime_type_check": {
+					"name": "mime_type_check",
+					"value": "(\"queued_files\".\"mime_type\" LIKE 'image/%') OR (\"queued_files\".\"mime_type\" LIKE 'video/%')"
+				},
+				"latitude_min_check": {
+					"name": "latitude_min_check",
+					"value": "\"queued_files\".\"latitude\" >= -90.0"
+				},
+				"latitude_max_check": {
+					"name": "latitude_max_check",
+					"value": "\"queued_files\".\"latitude\" <= 90.0"
+				},
+				"longitude_min_check": {
+					"name": "longitude_min_check",
+					"value": "\"queued_files\".\"longitude\" >= -180.0"
+				},
+				"longitude_max_check": {
+					"name": "longitude_max_check",
+					"value": "\"queued_files\".\"longitude\" <= 180.0"
+				}
+			}
+		},
+		"queued_files_to_keywords": {
+			"name": "queued_files_to_keywords",
+			"columns": {
+				"file_id": {
+					"name": "file_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"keyword_id": {
+					"name": "keyword_id",
+					"type": "integer",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				}
+			},
+			"indexes": {},
+			"foreignKeys": {
+				"queued_files_to_keywords_file_id_queued_files_id_fk": {
+					"name": "queued_files_to_keywords_file_id_queued_files_id_fk",
+					"tableFrom": "queued_files_to_keywords",
+					"tableTo": "queued_files",
+					"columnsFrom": ["file_id"],
+					"columnsTo": ["id"],
+					"onDelete": "cascade",
+					"onUpdate": "cascade"
+				},
+				"queued_files_to_keywords_keyword_id_keywords_id_fk": {
+					"name": "queued_files_to_keywords_keyword_id_keywords_id_fk",
+					"tableFrom": "queued_files_to_keywords",
+					"tableTo": "keywords",
+					"columnsFrom": ["keyword_id"],
+					"columnsTo": ["id"],
+					"onDelete": "restrict",
+					"onUpdate": "cascade"
+				}
+			},
+			"compositePrimaryKeys": {
+				"queued_files_to_keywords_file_id_keyword_id_pk": {
+					"columns": ["file_id", "keyword_id"],
+					"name": "queued_files_to_keywords_file_id_keyword_id_pk"
+				}
+			},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		},
+		"states": {
+			"name": "states",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "integer",
+					"primaryKey": true,
+					"notNull": true,
+					"autoincrement": true
+				},
+				"name": {
+					"name": "name",
+					"type": "text",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				}
+			},
+			"indexes": {
+				"states_name_unique": {
+					"name": "states_name_unique",
+					"columns": ["name"],
+					"isUnique": true
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {},
+			"uniqueConstraints": {},
+			"checkConstraints": {}
+		}
+	},
+	"views": {},
+	"enums": {},
+	"_meta": {
+		"schemas": {},
+		"tables": {},
+		"columns": {}
+	},
+	"internal": {
+		"indexes": {}
+	}
+}

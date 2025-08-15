@@ -1,12 +1,8 @@
 import { type Actions, fail } from '@sveltejs/kit';
-import { z, ZodError } from 'zod';
+import { ZodError } from 'zod';
 import bcrypt from 'bcrypt';
-import { getLoginPassword, setLoginPassword } from '$lib/server/db';
-
-/**
- * Schema for password validation.
- */
-const PasswordSchema = z.string().min(8, 'Password must be at least 8 characters long.');
+import { database } from '$lib/server/db';
+import { PasswordSchema } from '$lib/server/validation-schema';
 
 export const actions: Actions = {
 	// Update login password
@@ -16,7 +12,7 @@ export const actions: Actions = {
 			const oldPassword = PasswordSchema.parse(formData.get('oldPassword'));
 			const newPassword = PasswordSchema.parse(formData.get('newPassword'));
 
-			const oldPasswordHash = await getLoginPassword();
+			const oldPasswordHash = await database.auth.getLoginPassword();
 			if (!oldPasswordHash)
 				// We should not hit this
 				return fail(400, { errors: ['No password registered.'] });
@@ -28,7 +24,7 @@ export const actions: Actions = {
 
 				const saltRounds = 10;
 				const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
-				await setLoginPassword(newPasswordHash);
+				await database.auth.setLoginPassword(newPasswordHash);
 
 				return { success: true, messages: ['Password successfully updated'] };
 			} else {

@@ -1,14 +1,13 @@
 services:
-  snapsort-db:
-    image: postgres
-    restart: always
+  snapsort:
+    image: bhatushar/snapsort:dev
+    build:
+      context: .
     ports:
-      - '5432:5432'
-    environment:
-      POSTGRES_DB: snapsort
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      - '3990:3990'
     volumes:
-      - pgdata:/var/lib/postgresql/data
-volumes:
-  pgdata:
+      - './data:/app/data'
+      - './data/library:/app/library'
+    environment:
+      TZ: Asia/Calcutta
+    restart: unless-stopped

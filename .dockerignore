@@ -1,0 +1,16 @@
+.git
+.idea
+.svelte-kit
+build
+data
+node_modules
+.dockerignore
+.env.development
+.env.example
+.gitignore
+.npmrc
+.prettierignore
+.prettierrc
+Dockerfile
+LICENSE
+README.md

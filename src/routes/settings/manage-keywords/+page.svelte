@@ -2,19 +2,18 @@
 	import IconNewLabelOutlineSharp from '~icons/material-symbols/new-label-outline-sharp';
 	import IconClose from '~icons/material-symbols/close';
 	import SearchSelect from '$lib/components/search-select.svelte';
-	import type { KeywordCategory } from '$lib/types';
+	import { KeywordCategories } from '$lib/types';
 	import type { PageProps } from './$types';
 	import { enhance } from '$app/forms';
-	import { removeDuplicatesPredicate } from '$lib/utility';
 	import Loader from '$lib/components/loader.svelte';
+	import NoticeModal from '$lib/components/notice-modal.svelte';
 
 	const { data, form }: PageProps = $props();
 	let { keywords, locations } = $derived(data);
 
-	let showErrorsModal = $derived<boolean>((form?.errors?.length ?? 0) !== 0);
 	let showAddKeywordModal = $state(false);
 
-	// Reactive data for new keyword being added
+	// Reactive data for the new keyword being added
 	let newKeywordData = $state({
 		category: 'Location',
 		city: '',
@@ -22,16 +21,7 @@
 		country: ''
 	});
 
-	const keywordCategories: KeywordCategory[] = [
-		'Album',
-		'Group',
-		'Location',
-		'Person',
-		'Animal',
-		'Other'
-	] as const;
-
-	let loadingState = $state(false);
+	let showLoader = $state(false);
 </script>
 
 <svelte:head>
@@ -39,9 +29,7 @@
 </svelte:head>
 
 <section class="flex h-screen flex-col justify-between">
-	{#if loadingState}
-		<Loader />
-	{/if}
+	<Loader {showLoader} />
 
 	<!-- SECTION: Header -->
 	<nav class="sticky top-0 z-10 flex h-16 items-center justify-between bg-black px-5 py-1">
@@ -83,12 +71,14 @@
 							class={`border-2 border-gray-300 px-2 ${keyword.isFolderLabel ? 'bg-green-100' : 'bg-red-100'}`}
 							>{keyword.isFolderLabel ? 'Yes' : 'No'}</td
 						>
-						<td class="border-2 border-gray-300 px-2">{keyword.city ?? ''}</td>
-						<td class="border-2 border-gray-300 px-2">{keyword.state ?? ''}</td>
-						<td class="border-2 border-gray-300 px-2">{keyword.country ?? ''}</td>
-						<td class="border-2 border-gray-300 px-2">{keyword.latitude ?? ''}</td>
-						<td class="border-2 border-gray-300 px-2">{keyword.longitude ?? ''}</td>
-						<td class="border-2 border-gray-300 px-2">{keyword.altitude ?? ''}</td>
+						{#if keyword.category === 'Location'}
+							<td class="border-2 border-gray-300 px-2">{keyword.city ?? ''}</td>
+							<td class="border-2 border-gray-300 px-2">{keyword.state ?? ''}</td>
+							<td class="border-2 border-gray-300 px-2">{keyword.country}</td>
+							<td class="border-2 border-gray-300 px-2">{keyword.latitude}</td>
+							<td class="border-2 border-gray-300 px-2">{keyword.longitude}</td>
+							<td class="border-2 border-gray-300 px-2">{keyword.altitude ?? ''}</td>
+						{/if}
 					</tr>
 				{/each}
 			</tbody>
@@ -125,10 +115,10 @@
 				method="POST"
 				action="?/addKeyword"
 				use:enhance={() => {
-					loadingState = true;
+					showLoader = true;
 					return async ({ update }) => {
 						await update();
-						loadingState = false;
+						showLoader = false;
 					};
 				}}
 				class="grid grid-cols-6 items-center gap-4 lg:grid-cols-12"
@@ -145,7 +135,7 @@
 					class="col-span-4 lg:col-span-4"
 					bind:value={newKeywordData.category}
 				>
-					{#each keywordCategories as category (category)}
+					{#each KeywordCategories as category (category)}
 						<option value={category}>{category}</option>
 					{/each}
 				</select>
@@ -212,6 +202,7 @@
 						type="number"
 						min="-90"
 						max="90"
+						step="any"
 						name="latitude"
 						id="latitude"
 						class="col-span-4 lg:col-span-3"
@@ -223,6 +214,7 @@
 						type="number"
 						min="-180"
 						max="180"
+						step="any"
 						name="longitude"
 						id="longitude"
 						class="col-span-4 lg:col-span-3"
@@ -230,7 +222,13 @@
 
 					<!-- Altitude -->
 					<label for="altitude" class="col-span-2 lg:col-span-1">Altitude:</label>
-					<input type="number" name="altitude" id="altitude" class="col-span-4 lg:col-span-3" />
+					<input
+						type="number"
+						step="any"
+						name="altitude"
+						id="altitude"
+						class="col-span-4 lg:col-span-3"
+					/>
 				{/if}
 
 				<!-- Submit -->
@@ -244,27 +242,6 @@
 	</section>
 {/if}
 
-<!-- Form errors -->
-{#if showErrorsModal}
-	<section class="fixed inset-0 z-50 flex flex-col">
-		<button
-			aria-label="close-errors-modal"
-			class="grow bg-black/70"
-			onclick={() => (showErrorsModal = false)}
-		></button>
-		<div class="bg-red-200 px-4 py-2 text-red-950">
-			<div class="mb-2 flex justify-between">
-				<span class="text-xl font-bold">Something went wrong:</span>
-				<button onclick={() => (showErrorsModal = false)} class="cursor-pointer text-xl font-bold">
-					<IconClose />
-				</button>
-			</div>
-			<hr />
-			<ul class="mt-2 px-2">
-				{#each form?.errors?.filter(removeDuplicatesPredicate) ?? [] as error, i (i)}
-					<li class="my-2">{error}</li>
-				{/each}
-			</ul>
-		</div>
-	</section>
-{/if}
+<!-- Form result -->
+<NoticeModal modalType="error" messages={form?.errors ?? []} />
+<NoticeModal modalType="success" messages={form?.messages ?? []} />

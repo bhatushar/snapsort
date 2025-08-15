@@ -1,40 +1,64 @@
-import { ModifiedFileSchema } from '$lib/server/types';
-import { z } from 'zod';
+export const NonLocationKeywordCategories = [
+	'Album',
+	'Group',
+	'Person',
+	'Animal',
+	'Other'
+] as const;
+export type NonLocationKeywordCategory = (typeof NonLocationKeywordCategories)[number];
 
-export type KeywordCategory = 'Album' | 'Group' | 'Location' | 'Person' | 'Animal' | 'Other';
+export const KeywordCategories = [...NonLocationKeywordCategories, 'Location'] as const;
+export type KeywordCategory = (typeof KeywordCategories)[number];
 
-export type KeywordData = {
-	id: number;
-	name: string;
-	category: KeywordCategory;
-	city: string | null;
-	state: string | null;
-	country: string | null;
-	latitude: number | null;
-	longitude: number | null;
-	altitude: number | null;
-};
+export type KeywordData =
+	| {
+			keywordId: number;
+			keyword: string;
+			category: NonLocationKeywordCategory;
+			isFolderLabel: boolean;
+	  }
+	| {
+			keywordId: number;
+			keyword: string;
+			category: 'Location';
+			isFolderLabel: boolean;
+			cityId: number | null;
+			city: string | null;
+			stateId: number | null;
+			state: string | null;
+			countryId: number;
+			country: string;
+			latitude: number;
+			longitude: number;
+			altitude: number | null;
+	  };
 
-export type FileMetadata = {
-	captureDate: string | null;
-	captureTime: string | null;
-	timezone: string | null;
+export type FileData = {
+	path: string;
+	mimeType: string;
+	captureDateTime: Date | null;
+	timezone: string;
 	title: string | null;
 	latitude: number | null;
 	longitude: number | null;
 	altitude: number | null;
+	keywords: string[];
+};
+
+export type QueuedFileData = FileData & {
+	id: number;
+	name: string;
+	thumbnailPath: string;
 	keywordIds: number[];
 };
 
-export type QueuedFileData = {
-	id: number;
-	name: string;
-	path: string;
-} & FileMetadata;
-
-export type IndexPageResponse = {
-	keywordCtx: KeywordData[];
-	queuedFilesData: QueuedFileData[];
+export type CommittableQueuedFile = QueuedFileData & {
+	captureDateTime: Date;
 };
 
-export type ModifiedFileInput = z.input<typeof ModifiedFileSchema>;
+export type LibraryFileData = FileData & {
+	id: number;
+	name: string;
+	captureDateTime: Date;
+	keywordIds: number[];
+};

@@ -1,13 +1,13 @@
 import type { RequestHandler } from './$types';
 import fs from 'fs/promises';
 import path from 'path';
-import { getLibraryFiles } from '$lib/server/db';
+import { database } from '$lib/server/db';
 import { exportExifData } from '$lib/server/exiftool-wrapper';
 import { LIBRARY_ROOT_DIR } from '$env/static/private';
 
 export const GET: RequestHandler = async () => {
-	// Convert library files into a format compatible with exiftool-warpper
-	const libraryFiles = await getLibraryFiles();
+	// Convert library files into a format compatible with exiftool-wrapper
+	const libraryFiles = await database.libraryFiles.get();
 	const exifExportFiles = libraryFiles.map((file) => ({
 		...file,
 		path: path.join(LIBRARY_ROOT_DIR, file.path, file.name)

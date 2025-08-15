@@ -1,16 +1,10 @@
 import { DateTime } from 'luxon';
 import { removeDuplicatesPredicate } from '$lib/utility';
 import path from 'path';
-import fs, { mkdir } from 'fs/promises';
-import {
-	addFilesToLibrary,
-	db,
-	getPriorityOrderedFolderLabels,
-	getQueuedFilesData
-} from '$lib/server/db';
-import { queuedFilesTable } from '$lib/server/db/schema';
-import { eq } from 'drizzle-orm';
-import { LIBRARY_ROOT_DIR } from '$env/static/private';
+import fs from 'fs/promises';
+import { FFMPEG_PATH, FILE_UPLOAD_DIR } from '$env/static/private';
+import sharp from 'sharp';
+import { execPromise } from '$lib/server/utility';
 
 type PathRemap = {
 	fileId: number;
@@ -26,6 +20,99 @@ type PathRemapFile = {
 	keywords: string[];
 };
 
+type ImageThumbnailOpts = {
+	width: number;
+};
+
+type VideoThumbnailOpts = {
+	fps: number;
+	width: number;
+};
+
+/**
+ * Generate a JPEG thumbnail from an image file.
+ *
+ * @param imgPath Path to source image.
+ * @param outPath Path to thumbnail output.
+ * @param opts Options to control output parameters.
+ * @throws Error If thumbnail generation fails.
+ */
+async function imageThumbnail(
+	imgPath: string,
+	outPath: string,
+	opts: ImageThumbnailOpts = { width: 320 }
+) {
+	// Disable cache so that sharp releases lock on the source file
+	sharp.cache(false);
+
+	await sharp(imgPath)
+		.resize(opts.width)
+		.withMetadata() // Preserve metadata for correct orientation
+		.jpeg()
+		.toFile(outPath);
+}
+
+/**
+ * Generate a GIF thumbnail from a video file.
+ *
+ * @param videoPath Path to source video.
+ * @param outPath Path to thumbnail output.
+ * @param opts Options to control output parameters.
+ * @throws Error If GIF generation fails.
+ */
+async function videoToGif(
+	videoPath: string,
+	outPath: string,
+	opts: VideoThumbnailOpts = { fps: 3, width: 200 }
+) {
+	if (!FFMPEG_PATH) {
+		throw new Error('FFMPEG not found.');
+	}
+
+	/*
+		Use ffmpeg to generate a GIF from a video with following parameters:
+		- fps sets the frame rate.
+		- scale sets the pixel width of the output GIF. Height is auto-determined (-1).
+		- lanczos is the scaling algorithm.
+		- split allows one-shot GIF generation without storing intermediate PNGs.
+		- palettegen and paletteuse control the colors.
+		- loop infinitely.
+		FFMPEG ref: https://superuser.com/a/556031
+		TODO find better alternatives for generating video thumbnails.
+	 */
+	const { stderr } = await execPromise(
+		`"${FFMPEG_PATH}" -i "${videoPath}" ` +
+			`-vf "fps=${opts.fps},scale=${opts.width}:-1:flags=lanczos,` +
+			`split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" ` +
+			`-loop 0 -loglevel error ${outPath}`
+	);
+
+	if (stderr) {
+		throw new Error(`[utility.ts:videoToGif] ffmpeg error: ${stderr}`);
+	}
+}
+
+/**
+ * Generates a thumbnail for an image or video file and store in the thumbnail directory.
+ * JPEG is used for an image thumbnail. GIF is used for a video thumbnail.
+ *
+ * @param filePath - Path to the source file
+ * @param fileType - MIME type of the file (e.g., 'image/jpeg', 'video/mp4')
+ * @returns The full path where the thumbnail was saved
+ */
+export const generateFileThumbnail = async (filePath: string, fileType: string) => {
+	const thumbName = path.parse(filePath).name;
+	const thumbExt = fileType.startsWith('image/') ? '.jpg' : '.gif';
+	const thumbPath = path.join(FILE_UPLOAD_DIR, 'thumb', thumbName + thumbExt);
+
+	// Generate thumbnail
+	if (fileType.startsWith('image/')) await imageThumbnail(filePath, thumbPath);
+	else await videoToGif(filePath, thumbPath);
+	console.debug('[file-manager.ts:generateFileThumbnail] thumbnail written:', thumbPath);
+
+	return thumbPath;
+};
+
 /**
  * Generates mappings for new file paths based on capture date and keywords. Doesn't move the files
  * to new locations.
@@ -39,7 +126,7 @@ type PathRemapFile = {
  * - `MM` is the number of the month (0-padded).
  * - `Month` is the full-name of the month.
  * - `DD` is the date of the month (0-padded).
- * - `TAG` is the tag of the file based on type (IMG for images, VID for videos) or keyword (EDT if Edit keyword).
+ * - `TAG` is the tag of the file based on type (IMG for images, VID for videos) or keyword (EDT for Edit keyword).
  * - `Index` is the 3-digit per-tag index starting from 0.
  *
  * @param files Files to be remapped. Should be sorted in ascending order of capture time.
@@ -47,7 +134,7 @@ type PathRemapFile = {
  * @param sortedFolderLabels Array of folder label keywords sorted by priority (higher index = higher priority).
  * @returns Array of objects containing the original file path, new file path, and file ID for each remapped file.
  */
-const remapFilePaths = (
+export const remapFilePaths = (
 	files: PathRemapFile[],
 	newRootPath: string,
 	sortedFolderLabels: string[]
@@ -128,10 +215,10 @@ const remapFilePaths = (
  * Asynchronously copies a list of files from their source paths to their respective destination paths.
  * Ensures all source files exist, creates necessary destination directories, and copies the files while preserving metadata.
  *
- * @param remaps - Array of objects mapping source file paths to destination file paths.
+ * @param remaps - Array of mappings between source file and destination file paths.
  * @throws Throws an error if any of the source files are missing.
  */
-const copyFilesToDestination = async (remaps: PathRemap[]) => {
+export const copyFilesToDestination = async (remaps: PathRemap[]) => {
 	// Ensure all source files are present in the disk
 	const fileStats = await Promise.all(
 		remaps.map(async ({ sourcePath }) => ({ path: sourcePath, stat: await fs.stat(sourcePath) }))
@@ -144,75 +231,46 @@ const copyFilesToDestination = async (remaps: PathRemap[]) => {
 		.map(({ destinationPath }) => path.dirname(destinationPath))
 		.filter(removeDuplicatesPredicate);
 
-	await Promise.all(dirs.map((dir) => mkdir(dir, { recursive: true })));
+	await Promise.all(dirs.map((dir) => fs.mkdir(dir, { recursive: true })));
 
 	// Copy files with metadata
 	await Promise.all(remaps.map(async (file) => fs.copyFile(file.sourcePath, file.destinationPath)));
 };
 
 /**
- * Delete queued files.
- * This includes removing the database entry, the uploaded file, and the generated thumbnail.
+ * Writes a file to the upload directory with a randomly generated, unique filename.
  *
- * @param fileIds IDs of files to be deleted
- * @returns Boolean indicating whether deletion is successful
+ * @param file - The File object to be written to disk
+ * @returns The full path where the file was saved
  */
-export const deleteQueuedFiles = async (fileIds: number[]): Promise<boolean> => {
-	let isDeletionSuccessful = true;
+export const writeFileToDisk = async (file: File) => {
+	const newFileName = crypto.randomUUID().toString();
+	const fileExt = path.extname(file.name);
+	const filePath = path.join(FILE_UPLOAD_DIR, newFileName + fileExt);
 
-	if (fileIds.length === 0) return isDeletionSuccessful;
+	// Write files to server
+	const fileBuffer = Buffer.from(await file.arrayBuffer());
+	await fs.writeFile(filePath, fileBuffer);
+	console.debug('[file-manager.ts:writeFileToDisk] file written:', filePath);
 
-	// Get paths associated with all the files
-	const fileData = await getQueuedFilesData(fileIds);
-
-	// Handle each file deletion separately
-	// Failure in deleting one file should not affect other files
-	await Promise.all(
-		fileData.map(async (file) => {
-			try {
-				await db.transaction(async (tx) => {
-					await tx.delete(queuedFilesTable).where(eq(queuedFilesTable.id, file.id));
-					// Deleting the original before thumbnail, so that if a failure occurs,
-					// the thumbnail can still be fetched to show the user
-					if ((await fs.stat(file.path)).isFile()) await fs.rm(file.path);
-					if ((await fs.stat(file.thumbnailPath)).isFile()) await fs.rm(file.thumbnailPath);
-				});
-			} catch (error) {
-				console.error(`[index.server.ts:deleteFiles] failed to delete ${file.id}:`, error);
-				isDeletionSuccessful = false;
-			}
-		})
-	);
-
-	return isDeletionSuccessful;
+	return filePath;
 };
 
 /**
- * Processes queued files by moving them to the library and updating the database.
+ * Deletes multiple files from the disk.
+ *
+ * @param filePaths - Array of file paths to be deleted
+ * @throws Error If a file exists but cannot be deleted.
  */
-export const moveQueuedFilesToLibrary = async () => {
-	const queuedFilesData = await getQueuedFilesData();
-	const folderLabels = await getPriorityOrderedFolderLabels(
-		queuedFilesData.flatMap(({ keywordIds }) => keywordIds).filter((kw) => kw !== null)
+export const deleteFilesFromDisk = async (filePaths: string[]) => {
+	await Promise.all(
+		filePaths.map(async (filePath) => {
+			try {
+				await fs.unlink(filePath);
+			} catch (error) {
+				console.error(`[file-manager.ts:deleteFilesFromDisk] failed to delete ${filePath}:`, error);
+				if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+			}
+		})
 	);
-	const remappedFilePaths = remapFilePaths(queuedFilesData, LIBRARY_ROOT_DIR, folderLabels);
-
-	await copyFilesToDestination(remappedFilePaths);
-
-	// Prepare database entries for new library files
-	const newLibraryFiles = queuedFilesData.map((file) => {
-		let newFilePath = remappedFilePaths.find((remap) => remap.fileId === file.id)
-			?.destinationPath as string;
-		const newFileName = path.basename(newFilePath);
-		newFilePath = path.relative(LIBRARY_ROOT_DIR, path.dirname(newFilePath));
-
-		return {
-			...file,
-			name: newFileName,
-			path: newFilePath
-		};
-	});
-	await addFilesToLibrary(newLibraryFiles);
-
-	await deleteQueuedFiles(remappedFilePaths.map(({ fileId }) => fileId));
 };

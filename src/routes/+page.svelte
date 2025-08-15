@@ -6,41 +6,59 @@
 	import IconSaveSharp from '~icons/material-symbols/save-sharp';
 	import IconCheckBoxSharp from '~icons/material-symbols/check-box-sharp';
 	import IconDriveFileMoveSharp from '~icons/material-symbols/drive-file-move-sharp';
-	import IconClose from '~icons/material-symbols/close';
 	import MediaCard, { type MediaCardProps } from '$lib/components/media-card.svelte';
 	import BatchEditModal from '$lib/components/batch-edit-modal.svelte';
-	import type { ModifiedFileInput } from '$lib/types';
+	import type { QueuedFileData } from '$lib/types';
 	import { setContext } from 'svelte';
 	import Loader from '$lib/components/loader.svelte';
-	import type { PageData, ActionData } from './$types';
-	import { removeDuplicatesPredicate, isValueSet } from '$lib/utility';
+	import NoticeModal from '$lib/components/notice-modal.svelte';
+	import type { PageProps } from './$types';
+	import { isValueSet } from '$lib/utility';
+	import { DateTime } from 'luxon';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	let { data, form }: PageProps = $props();
 
-	let mediaCardData = $state<MediaCardProps[]>(
-		data.queuedFilesData.map((queuedFile) => ({
+	/**
+	 * Convert queued file data provided by the server into a format compatible with the media card.
+	 *
+	 * @param queuedFile Queued file data from server.
+	 * @returns Media card data.
+	 */
+	const convertQueuedFileToMediaCard = (queuedFile: QueuedFileData): MediaCardProps => {
+		let captureDate: string | null = null;
+		let captureTime: string | null = null;
+
+		// Split date and time into separate properties
+		if (queuedFile.captureDateTime) {
+			const luxonDateTime = queuedFile.timezone
+				? DateTime.fromJSDate(queuedFile.captureDateTime).setZone(queuedFile.timezone)
+				: DateTime.fromJSDate(queuedFile.captureDateTime);
+			captureDate = luxonDateTime.toFormat('yyyy-MM-dd');
+			captureTime = luxonDateTime.toFormat('HH:mm:ss');
+		}
+
+		return {
 			...queuedFile,
+			captureDate,
+			captureTime,
 			markedForDeletion: false,
 			isSelected: false
-		}))
-	);
+		};
+	};
+
+	let mediaCardData = $state<MediaCardProps[]>(data.queuedFiles.map(convertQueuedFileToMediaCard));
 	// Update state whenever the server updates data
 	$effect(() => {
-		mediaCardData = data.queuedFilesData.map((queuedFile) => ({
-			...queuedFile,
-			markedForDeletion: false,
-			isSelected: false
-		}));
+		mediaCardData = data.queuedFiles.map(convertQueuedFileToMediaCard);
 	});
 
 	setContext('keyword-ctx', data.keywordCtx);
 
 	// UI states
-	let loadingState = $state(false);
+	let showLoader = $state(false);
 	let showBatchEditModal = $state(false);
 	let showSaveModal = $state(false);
-	let showErrorsModal = $derived<boolean>((form?.errors?.length ?? 0) !== 0);
-	let allFilesSelected = $derived(mediaCardData.every((file) => file.isSelected));
+	let areAllFilesSelected = $derived(mediaCardData.every((file) => file.isSelected));
 
 	/**
 	 * Binds to the file-upload form
@@ -53,9 +71,7 @@
 </svelte:head>
 
 <section class="flex h-screen flex-col justify-between">
-	{#if loadingState}
-		<Loader />
-	{/if}
+	<Loader {showLoader} />
 
 	<!-- SECTION: Header -->
 	<nav class="sticky top-0 z-10 flex h-16 items-center justify-between bg-black px-5 py-1">
@@ -66,7 +82,7 @@
 			{#if mediaCardData.some((queuedFile) => queuedFile.isSelected)}
 				<input
 					type="checkbox"
-					bind:checked={allFilesSelected}
+					bind:checked={areAllFilesSelected}
 					onclick={(event) => {
 						mediaCardData.forEach((queuedFile) => {
 							if (event.target instanceof HTMLInputElement) {
@@ -82,10 +98,10 @@
 					action="?/uploadFiles"
 					method="post"
 					use:enhance={() => {
-						loadingState = true;
+						showLoader = true;
 						return async ({ update }) => {
 							await update();
-							loadingState = false;
+							showLoader = false;
 						};
 					}}
 					enctype="multipart/form-data"
@@ -138,7 +154,7 @@
 					<MediaCard
 						id={mediaCardData[i].id}
 						name={mediaCardData[i].name}
-						path={mediaCardData[i].path}
+						thumbnailPath={`/api/thumbnail/${mediaCardData[i].id}`}
 						bind:captureDate={mediaCardData[i].captureDate}
 						bind:captureTime={mediaCardData[i].captureTime}
 						bind:timezone={mediaCardData[i].timezone}
@@ -190,35 +206,12 @@
 
 <!-- SECTION: Dialog modals -->
 
-<!-- Form errors -->
-{#if showErrorsModal}
-	<section class="fixed inset-0 z-50 flex flex-col">
-		<button
-			aria-label="close-errors-modal"
-			class="grow bg-black/70"
-			onclick={() => (showErrorsModal = false)}
-		></button>
-		<div class="bg-red-200 px-4 py-2 text-red-950">
-			<div class="mb-2 flex justify-between">
-				<span class="text-xl font-bold">Something went wrong:</span>
-				<button onclick={() => (showErrorsModal = false)} class="cursor-pointer text-xl font-bold">
-					<IconClose />
-				</button>
-			</div>
-			<hr />
-			<ul class="mt-2 px-2">
-				{#each form?.errors?.filter(removeDuplicatesPredicate) ?? [] as error, i (i)}
-					<li class="my-2">{error}</li>
-				{/each}
-			</ul>
-		</div>
-	</section>
-{/if}
+<!-- Form result -->
+<NoticeModal modalType="error" messages={form?.errors ?? []} />
+<NoticeModal modalType="success" messages={form?.messages ?? []} />
 
 <!-- Wrap in if-guard here to ensure onMount is triggered every time modal is opened -->
-{#if showBatchEditModal}
-	<BatchEditModal bind:showModal={showBatchEditModal} bind:filesData={mediaCardData} />
-{/if}
+<BatchEditModal bind:showModal={showBatchEditModal} bind:filesData={mediaCardData} />
 
 {#if showSaveModal}
 	<!-- Save action items -->
@@ -235,8 +228,8 @@
 				method="POST"
 				class="w-full"
 				use:enhance={({ formData }) => {
-					loadingState = true;
-					const fileChanges: ModifiedFileInput[] = mediaCardData
+					showLoader = true;
+					const fileChanges = mediaCardData
 						.filter((metadata) => !metadata.markedForDeletion)
 						.map((metadata) => ({
 							id: metadata.id,
@@ -245,14 +238,14 @@
 							 * when committing files to the library. But I have offloaded all validation logic to
 							 * the server for now.
 							 */
-							captureDate: !isValueSet(metadata.captureDate) ? null : metadata.captureDate,
-							captureTime: !isValueSet(metadata.captureTime) ? null : metadata.captureTime,
-							timezone: !isValueSet(metadata.timezone) ? null : metadata.timezone,
-							title: !isValueSet(metadata.title) ? null : metadata.title,
-							latitude: !isValueSet(metadata.latitude) ? null : metadata.latitude,
-							longitude: !isValueSet(metadata.longitude) ? null : metadata.longitude,
-							altitude: !isValueSet(metadata.altitude) ? null : metadata.altitude,
-							keywordIds: !isValueSet(metadata.keywordIds) ? [] : metadata.keywordIds
+							captureDate: isValueSet(metadata.captureDate) ? metadata.captureDate : null,
+							captureTime: isValueSet(metadata.captureTime) ? metadata.captureTime : null,
+							timezone: isValueSet(metadata.timezone) ? metadata.timezone : null,
+							title: isValueSet(metadata.title) ? metadata.title : null,
+							latitude: isValueSet(metadata.latitude) ? metadata.latitude : null,
+							longitude: isValueSet(metadata.longitude) ? metadata.longitude : null,
+							altitude: isValueSet(metadata.altitude) ? metadata.altitude : null,
+							keywordIds: isValueSet(metadata.keywordIds) ? metadata.keywordIds : []
 						}));
 
 					const deletedFileIds = mediaCardData
@@ -265,7 +258,7 @@
 
 					return async ({ update }) => {
 						await update();
-						loadingState = false;
+						showLoader = false;
 					};
 				}}
 			>
@@ -281,34 +274,32 @@
 			method="POST"
 			class="w-full"
 			use:enhance={({ formData }) => {
-				loadingState = true;
-				const fileChanges: ModifiedFileInput[] = mediaCardData
+				showLoader = true;
+				const fileChanges = mediaCardData
 					.filter((metadata) => !metadata.markedForDeletion)
 					.map((metadata) => ({
 						id: metadata.id,
 						// Normalize all unset values
-						captureDate: !isValueSet(metadata.captureDate) ? null : metadata.captureDate,
-						captureTime: !isValueSet(metadata.captureTime) ? null : metadata.captureTime,
-						timezone: !isValueSet(metadata.timezone) ? null : metadata.timezone,
-						title: !isValueSet(metadata.title) ? null : metadata.title,
-						latitude: !isValueSet(metadata.latitude) ? null : metadata.latitude,
-						longitude: !isValueSet(metadata.longitude) ? null : metadata.longitude,
-						altitude: !isValueSet(metadata.altitude) ? null : metadata.altitude,
-						keywordIds: !isValueSet(metadata.keywordIds) ? [] : metadata.keywordIds
+						captureDate: isValueSet(metadata.captureDate) ? metadata.captureDate : null,
+						captureTime: isValueSet(metadata.captureTime) ? metadata.captureTime : null,
+						timezone: isValueSet(metadata.timezone) ? metadata.timezone : null,
+						title: isValueSet(metadata.title) ? metadata.title : null,
+						latitude: isValueSet(metadata.latitude) ? metadata.latitude : null,
+						longitude: isValueSet(metadata.longitude) ? metadata.longitude : null,
+						altitude: isValueSet(metadata.altitude) ? metadata.altitude : null,
+						keywordIds: isValueSet(metadata.keywordIds) ? metadata.keywordIds : []
 					}));
 
 				const deletedFileIds = mediaCardData
 					.filter((metadata) => metadata.markedForDeletion)
 					.map((metadata) => metadata.id);
 
-				console.log('Delete files:', deletedFileIds);
-				console.log('JSON string:', JSON.stringify({ ids: deletedFileIds }));
 				formData.append('fileChanges', JSON.stringify(fileChanges));
 				formData.append('deletedFiles', JSON.stringify({ ids: deletedFileIds }));
 				showSaveModal = false;
 				return async ({ update }) => {
 					await update();
-					loadingState = false;
+					showLoader = false;
 				};
 			}}
 		>

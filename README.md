@@ -1,7 +1,18 @@
 # SnapSort
 
-A very opinionated solution for a personal problem of organizing a photos/videos library. SnapSort helps you organize
-media files (images/videos) and edit metadata.
+A very opinionated solution for a very personal problem of organizing a photos/videos library. SnapSort helps you
+(read: me) organize media files (images/videos) and edit metadata.
+
+## Table of Contents
+
+- [Features](#features)
+  - [Metadata Management](#metadata-management)
+  - [Library Organization](#library-organization)
+- [Setup and Usage](#setup-and-usage)
+- [Contribution and Development](#contribution-and-development)
+  - [Running a development instance](#running-a-development-instance)
+  - [Project structure](#project-structure)
+- [Future Improvements](#future-improvements)
 
 ## Features
 
@@ -19,7 +30,9 @@ media files (images/videos) and edit metadata.
 Media library is organized in a "Year / Month / Day" hierarchy. The Day folder may have a `- Keyword` suffix
 depending on whether any of the files within that folder contains a keyword which can be used as a folder label.
 
-The files follow the following naming convention: `TYPE-YYYYMMDD-INDEX`
+The files use the following naming convention: `TAG-YYYYMMDD-INDEX`<br/>
+`TAG` will be `IMG` or `VID` depending on the type of the media. A special keyword `Edit` can be added to the file to
+overwrite `TAG` to be `EDT`.
 
 ```
 library/
@@ -29,152 +42,124 @@ library/
                 |- IMG-20250101-000.jpg
                 |- VID-20250101-000.mp4
             |- 02 - Birthday/
+                |- EDT-20250102-000.jpg
                 |- IMG-20250102-000.jpg
                 |- IMG-20250102-001.jpg
 ```
 
-## Prerequisites
+## Setup and Usage
 
-- [Node.js](https://nodejs.org/) (v18 or later)
-- [PNPM](https://pnpm.io/) package manager
-- [Docker](https://www.docker.com/) and [Docker Compose](https://docs.docker.com/compose/) (for PostgreSQL database)
-- [ExifTool](https://exiftool.org/) (for metadata manipulation)
-- [FFmpeg](https://ffmpeg.org/) (for video processing)
+**Prerequisites:**
 
-## Installation
+- [Docker](https://www.docker.com/)
+- [Ability to use Docker](https://www.youtube.com/watch?v=DQdB7wFEygo)
 
-1. Clone the repository:
+**Docker Compose configuration:**
 
-   ```bash
-   git clone https://github.com/bhatushar/snap-sort.git
-   cd snap-sort
-   ```
+```yaml
+services:
+  snapsort:
+    image: bhatushar/snapsort
+    ports:
+      - '3990:3990'
+    volumes:
+      - '/app-data:/app/data'
+      - '/library:/app/library'
+    environment:
+      TZ: Asia/Calcutta
+    restart: unless-stopped
+```
 
-2. Install dependencies:
+`/app-data` is where SnapSort will store its internal files like the database, user-uploaded media, and thumbnails.<br/>
+`/library` is where your media will go once processed by SnapSort.<br/>
 
-   ```bash
-   pnpm install
-   ```
+Run the container with `docker compose up -d` and you should be able to access the website on `localhost:3990`.
 
-3. Create a `.env` file based on the provided `.env.example`:
+When you first launch the application, it will ask you to create a login password. SnapSort currently doesn't support
+multiple users.<br/>
+After logging in, you'll land on the homepage where you can upload new media files for processing. You can edit the date
+and time information, add titles to your media, tag them with keywords... Oh wait, you can't use keywords?
 
-   ```bash
-   cp .env.example .env
-   ```
+That's because you need to create the keywords first!<br/>
+Go to Settings > Manage Keywords. On the top-right, there will be an option to add keywords.<br/>
+Here, you can set the name of the keyword, its type/category, and whether to use it to label folders.<br/>
+Now you can go back and start tagging your files.
 
-4. Edit the `.env` file to configure your environment:
+Whatever changes you make will not persist until you save them. When you click the 'Save' button, you get two options:
 
-   - Set database credentials
-   - Configure paths to ExifTool and FFmpeg
-   - Set file storage directories
+1. _Apply Changes_: This will only store your changes in SnapSort's internal database. Your files will remain intact.
+   This is useful if you want to come back in the future and revise your changes.
+2. _Move to Library_: This is the final step. It will apply your changes to your files and move them to the library.
 
-5. Start the PostgreSQL database using Docker:
+## Contribution and Development
 
-   ```bash
-   pnpm db:start
-   ```
+This project is developed using the SvelteKit framework with TypeScript support. It uses a locally hosted SQLite
+database, and the DB connection is managed by Drizzle.<br/>
+Internally, it relies on [ExifTool](https://exiftool.org/) (for reading/writing metadata) and
+[FFmpeg](https://ffmpeg.org/) (for generating thumbnails for videos).
 
-6. Initialize the database:
-   ```bash
-   pnpm db:push
-   ```
+### Running a development instance
 
-## Running the Application
-
-### Development Mode
-
-Run the application in development mode:
+Set up the project:
 
 ```bash
-pnpm dev
+git clone https://github.com/bhatushar/snapsort.git
+cd snapsort
+pnpm install
 ```
 
-To make the development server accessible on your local network:
+Create an `.env.development` file:
 
-```bash
-pnpm dev-network
-```
+```dotenv
+# Database credentials
+DATABASE_URL="file:/path/to/db.sqlite3"
 
-### Production Mode
-
-Build the application for production:
-
-```bash
-pnpm build
-```
-
-Preview the production build:
-
-```bash
-pnpm preview
-```
-
-Run the production server:
-
-```bash
-node build
-```
-
-## Database Management
-
-- Push schema changes to the database:
-
-  ```bash
-  pnpm db:push
-  ```
-
-- Create migrations:
-
-  ```bash
-  pnpm db:migrate
-  ```
-
-- Open Drizzle Studio to manage database:
-  ```bash
-  pnpm db:studio
-  ```
-
-## Project Structure
-
-- `/src`: Source code
-  - `/lib`: Library code
-    - `/server`: Server-side code
-      - `/db`: Database models and operations
-  - `/routes`: SvelteKit routes
-- `/static`: Static assets
-
-## Configuration
-
-The application requires several environment variables to be set in the `.env` file:
-
-### Database Configuration
-
-```
-DATABASE_URL=postgresql://root:mysecretpassword@localhost:5432/snapsort
-POSTGRES_USER=root
-POSTGRES_PASSWORD=mysecretpassword
-```
-
-### External Tools
-
-```
+# Path to external binaries
 EXIFTOOL_PATH="/path/to/exiftool"
-FFMPEG_PATH="/path/to/ffmpeg"
-```
+FFMPEG_PATH="/path/toffmpeg"
 
-### File Storage
-
-```
+# Path to data storage
 FILE_UPLOAD_DIR="/path/to/uploaded-files"
 LIBRARY_ROOT_DIR="/path/to/library"
 ```
 
-## Usage
+Run database migrations and fire up the server:
 
-1. Start the application and navigate to the web interface
-2. Create new keywords
-3. Upload your media files
-4. Edit metadata as needed (date/time, description, GPS data, keywords)
-5. Apply the changes to temporarily modify the queued files
-6. Move files to the library to permanently save files
-7. Export metadata when needed for backup
+```bash
+pnpm db:migrate:dev
+pnpm dev
+```
+
+If you want to run a production server, you need to create an `.env.production` file and run `pnpm start`.
+
+### Project structure
+
+- `src/`:
+  - `lib/`:
+    - `components/`: Contains various UI components which can be imported in Svelte Pages
+    - `server/`: Server-only code
+      - `db/`:
+        - `index.ts`: Manages database connection and exposes a wrapper for all database interactions
+        - `schema.ts`: Defines the database structure which Drizzle uses to create migrations
+      - `exiftool-wrapper.ts`: Manages all interactions with ExifTool
+      - `file-manager.ts`: Handles all operations for uploaded files (create, rename, copy, delete)
+      - `validation-schema.ts`: Zod schemas to validate external input
+  - `routes/`: SvelteKit routes
+    - `api/`
+      - `export-exif/+server.ts`: Endpoint for exporting Exif data for all library files
+      - `thumbnail/[file_id]/+server.ts`: Endpoint for fetching thumbnail using the file ID
+
+## Future Improvements
+
+- Google Photos Integration: Currently, I use Google Photos as a cloud backup (I know it's not a real backup, hush!).
+  Once the files are committed to the library, they should also be uploaded to Google Photos. In the distant future, I
+  might look into extending this to multiple cloud providers.
+- Add Tests: Now that the MVP is developed, a robust testing suite is needed. My photos are too precious to expose to
+  untested code.
+- Backup/Restore: It's "technically" possible by manually cloning the app-data folder... But perhaps something more
+  robust.
+- Multi-user Support: The more, the merrier!
+- Modify/Delete Existing Keywords: So far, I haven't faced a need to update a Keyword once it's created. Nonetheless, it
+  is a useful feature.
+- Custom File Formats: I know I said it's opinionated, but it would still be nice to let users decide how they want
+  their media to be organized.

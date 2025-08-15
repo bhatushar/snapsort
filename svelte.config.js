@@ -11,7 +11,13 @@ const config = {
 		// adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.
 		// If your environment is not supported, or you settled on a specific environment, switch out the adapter.
 		// See https://svelte.dev/docs/kit/adapters for more information about adapters.
-		adapter: adapter()
+		adapter: adapter(),
+		// Accept requests from any Host.
+		// This is needed for self-hosting as there is no fixed origin.
+		// Security can be improved by letting users provide a list of allowed URLs which can be verified in hooks.
+		csrf: {
+			checkOrigin: false
+		}
 	}
 };
 

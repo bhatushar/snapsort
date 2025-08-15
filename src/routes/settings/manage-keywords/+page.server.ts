@@ -1,7 +1,8 @@
 import type { Actions, PageServerLoad } from './$types';
-import { addKeyword, getCities, getCountries, getKeywords, getStates } from '$lib/server/db';
+import { database } from '$lib/server/db';
 import { z, ZodError } from 'zod';
 import { fail } from '@sveltejs/kit';
+import { NonLocationKeywordCategories } from '$lib/types';
 
 /**
  * Schema for validating the new keyword being added by the user.
@@ -17,108 +18,70 @@ import { fail } from '@sveltejs/kit';
  * - `longitude`: GPS longitude, if the category is 'Location'.
  * - `altitude`: Optional GPS altitude, if the category is 'Location'.
  */
-const IncomingKeywordSchema = z
+const KeywordInputSchema = z
 	.object({
 		keyword: z
 			.string()
-			.min(1, 'Keyword cannot be empty.')
+			.min(1, 'Keyword cannot be empty')
 			.refine(async (value) => {
-				const result = await getKeywords([value]);
-				return result.length === 0;
+				const existingKeyword = await database.keywords.get([value]);
+				return existingKeyword.length === 0;
 			}, 'Keyword already exists.'),
-		category: z.enum(['Album', 'Group', 'Location', 'Person', 'Animal', 'Other']),
-		isFolderLabel: z
-			.enum(['on', 'off'])
-			.nullable()
-			.transform((value) => value === 'on'),
-		city: z
-			.string()
-			.nullable()
-			.transform((value) => (value?.length ? value : null)),
-		state: z
-			.string()
-			.nullable()
-			.transform((value) => (value?.length ? value : null)),
-		country: z
-			.string()
-			.nullable()
-			.transform((value) => (value?.length ? value : null)),
-		latitude: z
-			.string()
-			.nullable()
-			.transform((value) => (value?.length ? parseInt(value) : null))
-			.refine(
-				(value) => value === null || (-90 <= value && value <= 90),
-				'Latitude must be in range -90 to 90.'
-			),
-		longitude: z
-			.string()
-			.nullable()
-			.transform((value) => (value?.length ? parseInt(value) : null))
-			.refine(
-				(value) => value === null || (-180 <= value && value <= 180),
-				'Longitude must be in range -180 to 180.'
-			),
-		altitude: z
-			.string()
-			.nullable()
-			.transform((value) => (value?.length ? parseInt(value) : null))
+		isFolderLabel: z.coerce.boolean()
 	})
-	.refine(
-		({ category, city, state, country }) =>
-			category === 'Location' || (!city && !state && !country),
-		"City/State/Country should only be defined for keywords with 'Location' category."
-	)
-	.refine(
-		({ category, country }) => category !== 'Location' || country,
-		'Country must be specified for a location.'
-	)
-	.refine(
-		({ category, city, state }) => category !== 'Location' || state || !city,
-		'City should only be set if state is provided.'
-	)
-	.refine(
-		({ category, latitude, longitude, altitude }) =>
-			category === 'Location' || (latitude === null && longitude === null && altitude === null),
-		"GPS Coordinates don't apply to non-location keywords."
-	)
-	.refine(
-		({ category, latitude, longitude }) =>
-			category !== 'Location' || (latitude !== null && longitude !== null),
-		'Latitude/Longitude must be specified for a location.'
+	.and(
+		z
+			.discriminatedUnion('category', [
+				z.object({ category: z.enum(NonLocationKeywordCategories) }),
+				z.object({
+					category: z.literal('Location'),
+					city: z.string().nullable(),
+					state: z.string().nullable(),
+					country: z.string(),
+					latitude: z.string().min(1, 'Latitude cannot be empty'),
+					longitude: z.string().min(1, 'Longitude cannot be empty'),
+					altitude: z.string().nullable()
+				})
+			])
+			// Cannot perform transformations or refinements inside discriminated union
+			.transform((data) => {
+				// Convert latitude, longitude and altitude to numbers
+				// Cannot coerce directly because zod converts empty string to 0
+				if (data.category === 'Location') {
+					return {
+						...data,
+						latitude: parseFloat(data.latitude),
+						longitude: parseFloat(data.longitude),
+						altitude:
+							data.altitude !== null && data.altitude !== '' ? parseFloat(data.altitude) : null
+					};
+				}
+				return data;
+			})
+			.refine(
+				(data) => data.category !== 'Location' || (-90 <= data.latitude && data.latitude <= 90),
+				'Latitude must be between -90 and 90.'
+			)
+			.refine(
+				(data) => data.category !== 'Location' || (-180 <= data.longitude && data.longitude <= 180),
+				'Longitude must be between -180 and 180.'
+			)
+			.refine(
+				(data) => data.category !== 'Location' || data.altitude === null || !isNaN(data.altitude),
+				'Altitude must be a number.'
+			)
+			.refine(
+				(data) => data.category !== 'Location' || data.state || !data.city,
+				'City should only be set if state is provided.'
+			)
 	);
-
-/**
- * Type definition for the new keyword being added by the user.
- *
- * This is defined explicitly to provide stricter typing for GPS information, but it should remain
- * in sync with {@link IncomingKeywordSchema}.
- */
-export type IncomingKeyword =
-	| {
-			keyword: string;
-			category: 'Album' | 'Group' | 'Person' | 'Animal' | 'Other';
-			isFolderLabel: boolean;
-			locationId: null;
-	  }
-	| {
-			keyword: string;
-			category: 'Location';
-			isFolderLabel: boolean;
-			city: string | null;
-			state: string | null;
-			country: string;
-			latitude: number;
-			longitude: number;
-			altitude: number | null;
-	  };
 
 export const load: PageServerLoad = async () => {
 	const [keywords, cities, states, countries] = await Promise.all([
-		getKeywords(),
-		getCities(),
-		getStates(),
-		getCountries()
+		database.keywords.get(),
+		database.locations.getCities(),
+		database.locations.getStates(),
+		database.locations.getCountries()
 	]);
 	return { keywords, locations: { cities, states, countries } };
 };
@@ -139,10 +102,10 @@ export const actions: Actions = {
 				longitude: formData.get('longitude'),
 				altitude: formData.get('altitude')
 			};
-			const keywordData = (await IncomingKeywordSchema.parseAsync(rawData)) as IncomingKeyword;
+			const keywordData = await KeywordInputSchema.parseAsync(rawData);
 			console.debug('[manage-keywords.server.ts:actions.addKeyword] keyword data:', keywordData);
-			await addKeyword(keywordData);
-			return { success: true };
+			await database.keywords.add(keywordData);
+			return { messages: [`Successfully added new keyword: ${keywordData.keyword}`] };
 		} catch (error) {
 			if (error instanceof ZodError) {
 				const errors = error.issues.map((issue) => issue.message);

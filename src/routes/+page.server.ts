@@ -1,36 +1,253 @@
 import type { Actions, PageServerLoad } from './$types';
 import path from 'path';
-import fs, { writeFile } from 'fs/promises';
 import { fail } from '@sveltejs/kit';
 import { z, ZodError } from 'zod';
-import { FILE_UPLOAD_DIR } from '$env/static/private';
+import { applyExifMetadata, getExifMetadata } from '$lib/server/exiftool-wrapper';
+import { database, type LibraryFileInput } from '$lib/server/db';
 import {
-	type ExifWriteableDataSimplified,
-	readSimplifiedExifProps,
-	writeSimplifiedExifProps
-} from '$lib/server/exiftool-wrapper';
-import { imageThumbnail, videoToGif } from '$lib/server/utility';
-import { db } from '$lib/server/db';
-import {
-	citiesTable,
-	countriesTable,
-	keywordsTable,
-	locationsTable,
-	queuedFilesTable,
-	queuedFilesToKeywordsTable,
-	statesTable
-} from '$lib/server/db/schema';
-import { DateTime } from 'luxon';
-import { and, eq, inArray, not, sql } from 'drizzle-orm';
-import type { IndexPageResponse, QueuedFileData } from '$lib/types';
-import {
-	CommittedFileListSchema,
-	DeletedFileListSchema,
-	ModifiedFileListSchema,
-	UploadedFileListSchema
-} from '$lib/server/types';
+	copyFilesToDestination,
+	deleteFilesFromDisk,
+	generateFileThumbnail,
+	remapFilePaths,
+	writeFileToDisk
+} from '$lib/server/file-manager';
+import type { CommittableQueuedFile, KeywordData, QueuedFileData } from '$lib/types';
+import { removeDuplicatesPredicate } from '$lib/utility';
 import ianaTz from '$lib/iana-tz.json';
-import { deleteQueuedFiles, moveQueuedFilesToLibrary } from '$lib/server/file-manager';
+import { DateTime } from 'luxon';
+import { LIBRARY_ROOT_DIR } from '$env/static/private';
+
+/* SECTION: Validation schemas */
+
+/**
+ * Schema to validate and transform a list of uploaded files.
+ *
+ * Validations:
+ * - The list contains at least one file.
+ * - Every file in the list has a size greater than 0 bytes.
+ * - Each file type is either an image or a video based on its MIME type.
+ *
+ * Transformations:
+ * - Converts the FileList object into an array of files for easier handling.
+ */
+const UploadedFileListSchema = z
+	.custom<FileList>()
+	.refine((files) => files.length > 0, 'No file uploaded')
+	.refine((files) => Array.from(files).every((file) => file.size > 0), 'Invalid file size')
+	.refine(
+		(files) =>
+			Array.from(files).every(
+				(file) => file.type.startsWith('image/') || file.type.startsWith('video/')
+			),
+		'Selected file is not a valid image/video'
+	)
+	.transform((files) => Array.from(files));
+
+/**
+ * Schema definition for validating and transforming the list of file IDs to be deleted.
+ *
+ * Validations:
+ * - All file IDs are present in the database.
+ *
+ * Transformations:
+ * - Filters out duplicate file IDs.
+ * - Converts the input object into a list of IDs.
+ */
+const DeletedFileListSchema = z
+	.object({
+		ids: z
+			.array(z.number())
+			.transform((ids) => ids.filter(removeDuplicatesPredicate))
+			// All IDs must be present in the database
+			.refine(async (ids) => {
+				if (ids.length === 0) return true;
+				const fileCount = await database.queuedFiles.count(ids);
+				return fileCount === ids.length;
+			}, 'Unknown file ID(s) provided for deletion.')
+	})
+	.transform((files) => files.ids);
+
+/**
+ * Schema to validate and transform changes made to the media files.
+ *
+ * Input object validations:
+ * - id: Unique file ID
+ * - captureDate: Date of capture in 'yyyy-mm-dd' format
+ * - captureTime: Time of capture in 'HH:MM:SS' format
+ * - timezone: Timezone of capture
+ * - title: Title of the file
+ * - latitude: Latitude at which the file was taken
+ * - longitude: Longitude at which the file was taken
+ * - altitude: Altitude at which the file was taken
+ * - keywordIds: IDs of keywords associated with the file
+ *
+ * Transformations:
+ * - Merges captureDate and captureTime into a common JSDate object as captureDateTime.
+ */
+const QueuedFileUpdateSchema = z
+	.object({
+		id: z.number().refine(async (id) => {
+			// Queued file must exist in the database
+			/*
+			 * PERFORMANCE NOTE:
+			 * This implementation is not optimal because it queries the database for every file separately.
+			 * Instead, it can be done with one query for aggregated IDs of all files.
+			 * However, I'm keeping this here just because semantically it makes more sense. If any
+			 * performance issues are observed, then this can be moved.
+			 */
+			return (await database.queuedFiles.count([id])) === 1;
+		}, 'Unknown file ID(s) provided.'),
+		captureDate: z.string().date().nullable(), // Date will be in 'yyyy-mm-dd' format
+		captureTime: z
+			.string()
+			.time({ message: 'Incorrect value provided for time.' })
+			.regex(/^\d{2}:\d{2}:\d{2}$/, 'Time is expected in HH:MM:SS format.') // Time should include seconds
+			.nullable(),
+		timezone: z
+			.string()
+			.refine(
+				(tz) => ianaTz.some((ianaTz) => ianaTz.zone === tz),
+				'Provided timezone does not exist'
+			)
+			.nullable(),
+		title: z.string().nullable(),
+		latitude: z.number().min(-90).max(90).nullable(),
+		longitude: z.number().min(-180).max(180).nullable(),
+		altitude: z.number().nullable(),
+		keywordIds: z
+			.array(z.number())
+			.transform((kw) => kw.filter(removeDuplicatesPredicate))
+			// All keywords must be present in the database
+			.refine(async (kw) => {
+				/*
+				 * PERFORMANCE NOTE:
+				 * This implementation is not optimal because it queries the database for every file separately.
+				 * Instead, it can be done with one query for aggregated keywords of all files.
+				 * However, I'm keeping this here just because semantically it makes more sense. If any
+				 * performance issues are observed, then this can be moved.
+				 */
+				if (kw.length === 0) return true;
+
+				const keywordsCount = await database.keywords.count(kw);
+				return keywordsCount === kw.length;
+			}, 'Provided keyword does not exist in the database.')
+			// Each file should have at most one album/location keyword
+			.refine(async (kw) => {
+				if (kw.length === 0) return true;
+
+				// Each file should have only one album/location keyword
+				const result = await database.keywords.countByCategory(['Album', 'Location'], kw);
+				return result.every(({ keywordCount }) => keywordCount <= 1);
+			}, 'Multiple albums/locations specified for the same file.')
+	})
+	// If a location keyword is present, latitude/longitude should be specified
+	.refine(async ({ keywordIds, latitude, longitude }) => {
+		if (keywordIds.length === 0 || (latitude !== null && longitude !== null)) return true;
+
+		const result = await database.keywords.countByCategory(['Location'], keywordIds);
+		return result.length === 0 || result[0].keywordCount === 0;
+	}, 'GPS coordinates are missing for file(s) with location keyword.')
+	// Partial datetime is not allowed
+	.refine(
+		({ captureDate, captureTime }) =>
+			(captureDate && captureTime) || (!captureDate && !captureTime),
+		'Both date and time must be specified.'
+	)
+	// Convert date and time input into JS Date
+	.transform(({ captureDate, captureTime, timezone, ...rest }) => {
+		if (!captureDate || !captureTime) return { captureDateTime: null, timezone, ...rest };
+
+		// Combine date and time into a common attribute, compatible with the database.
+		const datetime = DateTime.fromFormat(`${captureDate} ${captureTime}`, 'yyyy-MM-dd HH:mm:ss', {
+			zone: timezone ?? undefined
+		});
+		return {
+			...rest,
+			timezone,
+			captureDateTime: datetime.toJSDate()
+		};
+	})
+	// Date must be in the past
+	.refine(
+		({ captureDateTime }) => !captureDateTime || captureDateTime.getTime() <= Date.now(),
+		'File date is in the future'
+	);
+
+/**
+ * Schema to validate changes made to a list of media files.
+ *
+ * This schema ensures that all items in the array conform to the
+ * structure defined by {@link QueuedFileUpdateSchema}.
+ *
+ * Validations:
+ * - Ensures all file IDs in the list are unique.
+ */
+const QueuedFileUpdateListSchema = z
+	.array(QueuedFileUpdateSchema)
+	// All IDs must be distinct
+	.refine(
+		(files) =>
+			files.map((file) => file.id).filter(removeDuplicatesPredicate).length === files.length,
+		'Duplicate files provided.'
+	);
+
+/**
+ * Schema to validate and transform changes made to the media files being committed to the library.
+ *
+ * Uses {@link QueuedFileUpdateSchema} as the base structure and enforces stricter constraints on it.
+ *
+ * Validations:
+ * - Ensures that the `captureDateTime` attribute is not null.
+ * - Verifies that the `timezone` attribute is not null.
+ * - Validates that both `latitude` and `longitude` are either specified together or neither is provided.
+ * - Ensures that `altitude`, if specified, must be accompanied by both `latitude` and `longitude`.
+ * - Requires that if `latitude` and `longitude` are specified, at least one location keyword must also be present.
+ */
+const CommittableQueuedFileSchema = QueuedFileUpdateSchema.refine(
+	({ captureDateTime }) => captureDateTime !== null,
+	'Date/Time is missing.'
+)
+	.refine(({ timezone }) => timezone !== null, 'Timezone is missing.')
+	.refine(
+		({ latitude, longitude }) =>
+			(latitude !== null && longitude !== null) || (latitude === null && longitude === null),
+		'Both latitude and longitude must be specified or neither should be specified.'
+	)
+	.refine(
+		// Altitude is optional but should always be accompanied by latitude and longitude
+		({ latitude, altitude }) => !(latitude === null && altitude !== null),
+		'Partial GPS coordinates specified.'
+	)
+	.refine(async ({ keywordIds, latitude }) => {
+		/*
+		 * Base schema already ensures that if a location keyword is present, then the latitude/longitude
+		 * must be specified. Now, check the inverse. If latitude/longitude are specified, then a
+		 * location keyword must be present.
+		 */
+		if (latitude === null) return true; // No GPS coordinates specified
+
+		if (keywordIds.length === 0) return false;
+
+		const result = await database.keywords.countByCategory(['Location'], keywordIds);
+		return result.length === 1 && result[0].keywordCount === 1;
+	}, 'Location keyword is missing for a file with GPS coordinates.');
+
+/**
+ * Schema to validate a list of files being committed to the library.
+ *
+ * Validations:
+ * - The array must contain at least one file.
+ * - All files within the array must have unique identifiers (no duplicate IDs allowed).
+ */
+const CommittableQueuedFileListSchema = z
+	.array(CommittableQueuedFileSchema)
+	.refine((files) => files.length > 0, 'No files provided.')
+	.refine(
+		(files) =>
+			// All IDs must be distinct
+			files.map((file) => file.id).filter(removeDuplicatesPredicate).length === files.length,
+		'Duplicate files provided.'
+	);
 
 /* SECTION: Local functions */
 
@@ -38,8 +255,9 @@ import { deleteQueuedFiles, moveQueuedFilesToLibrary } from '$lib/server/file-ma
  * Handles upload of a new file. Generates a thumbnail, extracts exif data, and adds the file to DB.
  *
  * @param file
+ * @return True if the file is successfully processed, false otherwise.
  */
-const processIndividualUploadedFile = async (file: File) => {
+const processUploadedFile = async (file: File): Promise<boolean> => {
 	/*
 	 Assign a new unique name to each uploaded file and store the files to the server
 	 using new unique names. Use this file to get the exif info. Generate JPEG thumbnails
@@ -47,211 +265,115 @@ const processIndividualUploadedFile = async (file: File) => {
 	 unique name as the file. Add entries to the queue in DB.
 	 In case of failure, delete the DB entry and delete the file from the server.
 	 */
-	const newFileName = crypto.randomUUID().toString();
-	const fileExt = path.extname(file.name);
-	const thumbExt = file.type.startsWith('image/') ? '.jpg' : '.gif';
-	const filePath = path.join(FILE_UPLOAD_DIR, newFileName + fileExt);
-	const thumbPath = path.join(FILE_UPLOAD_DIR, 'thumb', newFileName + thumbExt);
+	let uploadedFilePath = '';
+	let thumbnailPath = '';
 
 	try {
-		// Write files to server
-		const fileBuffer = Buffer.from(await file.arrayBuffer());
-		await writeFile(filePath, fileBuffer);
-		console.debug('[index.server.ts:processIndividualUploadedFile] file written:', filePath);
-
-		// Generate thumbnail
-		if (file.type.startsWith('image/')) await imageThumbnail(fileBuffer, thumbPath);
-		else await videoToGif(filePath, thumbPath);
-		console.debug('[index.server.ts:processIndividualUploadedFile] thumbnail written:', thumbPath);
+		uploadedFilePath = await writeFileToDisk(file);
+		thumbnailPath = await generateFileThumbnail(uploadedFilePath, file.type);
 
 		// Get exif info
-		const exifData = await readSimplifiedExifProps(filePath, [
-			'MIMEType',
-			'DateTimeCreated',
-			'OffsetTime',
-			'Title',
-			'Keywords',
-			'GPSLatitude',
-			'GPSLongitude',
-			'GPSAltitude'
-		]);
-		if (!exifData) throw new Error('Exif extraction failed');
-		console.debug('[index.server.ts:processIndividualUploadedFile] Exif data:', exifData);
-
-		/*
-		 * HotFix for extracting timezone from Exif offset:
-		 * If the current timezone matches the Exif offset, use the current timezone.
-		 * Otherwise, find the first timezone which matches the Exif offset.
-		 */
-		let zoneName = DateTime.now().zoneName;
-		if (exifData.OffsetTime) {
-			if (!ianaTz.some((tz) => tz.zone === zoneName && tz.utcOffset.std === exifData.OffsetTime)) {
-				// The current timezone does not match the Exif offset present in the file
-				// Find the first timezone which matches the Exif offset
-				const tz = ianaTz.find((tz) => tz.utcOffset.std === exifData.OffsetTime);
-				if (tz) zoneName = tz.zone;
-			}
+		const exifData = await getExifMetadata(uploadedFilePath);
+		if (!exifData) {
+			console.error(
+				`[index.server.ts:processUploadedFile] Failed to extract Exif data for ${file.name}`
+			);
+			await deleteFilesFromDisk([uploadedFilePath, thumbnailPath]);
+			return false;
 		}
+		console.debug('[index.server.ts:processUploadedFile] Exif data:', exifData);
 
-		await db.transaction(async (tx) => {
-			// Append the new file to the database queue
-			const [{ fileId }] = await tx
-				.insert(queuedFilesTable)
-				.values({
-					name: file.name,
-					path: filePath,
-					thumbnailPath: thumbPath,
-					mimeType: exifData.MIMEType,
-					captureDateTime: exifData.DateTime ?? null,
-					timezone: zoneName,
-					title: exifData.Title ?? null,
-					latitude: exifData.GPSLatitude ?? null,
-					longitude: exifData.GPSLongitude ?? null,
-					altitude: exifData.GPSAltitude ?? null
-				})
-				.returning({ fileId: queuedFilesTable.id });
-
-			// Append related keywords to the database if the uploaded file has existing keywords
-			if (exifData.Keywords?.length) {
-				const keywordIds = await tx
-					.select({ keywordId: keywordsTable.id })
-					.from(keywordsTable)
-					.where(inArray(keywordsTable.keyword, exifData.Keywords));
-
-				if (keywordIds.length) {
-					await tx
-						.insert(queuedFilesToKeywordsTable)
-						.values(keywordIds.map(({ keywordId }) => ({ fileId, keywordId })));
-				} else {
-					console.warn(
-						`[index.server.ts:processIndividualUploadedFile]${file.name} has unknown keywords:`,
-						exifData.Keywords
-					);
-				}
-			}
+		await database.queuedFiles.add({
+			name: file.name,
+			thumbnailPath,
+			...exifData
 		});
+		return true;
 	} catch (error) {
-		console.error(
-			`[index.server.ts:processIndividualUploadedFile] Processing ${file.name} failed:`,
-			error
-		);
-
-		if ((await fs.stat(filePath)).isFile()) {
-			// Failed after writing the file to server, delete it
-			await fs.rm(filePath);
-		}
-
-		if ((await fs.stat(thumbPath)).isFile()) {
-			// Failed after writing the thumbnail to server, delete it
-			await fs.rm(thumbPath);
-		}
+		console.error(`[index.server.ts:processUploadedFile] Processing ${file.name} failed:`, error);
+		await deleteFilesFromDisk([uploadedFilePath, thumbnailPath]);
+		return false;
 	}
 };
 
 /**
- * Update file metadata in the database with the new changes.
+ * Delete queued files.
+ * This includes removing the database entry, the uploaded file, and the generated thumbnail.
  *
- * @param fileChanges
+ * @param fileIds IDs of files to be deleted
+ * @returns Boolean indicating whether deletion is successful
  */
-const updateFilesData = async (fileChanges: z.infer<typeof ModifiedFileListSchema>) => {
-	if (fileChanges.length === 0) return;
+const deleteQueuedFiles = async (fileIds: number[]): Promise<boolean> => {
+	let isDeletionSuccessful = true;
 
-	const fileKeywordPairs = fileChanges.flatMap((file) =>
-		file.keywordIds.flatMap((kw) => ({ fileId: file.id, keywordId: kw }))
+	if (fileIds.length === 0) return isDeletionSuccessful;
+
+	try {
+		await database.queuedFiles.delete(fileIds);
+	} catch (error) {
+		console.error(`[file-manager.ts:deleteQueuedFiles] failed to delete files:`, error);
+		isDeletionSuccessful = false;
+	}
+
+	return isDeletionSuccessful;
+};
+
+/**
+ * Moves files from the queue to the library.
+ *
+ * This function:
+ * 1. Retrieves folder labels for the files based on their keywords
+ * 2. Remaps file paths according to library structure
+ * 3. Copies files to their destination in library
+ * 4. Creates database entries for the new library files
+ * 5. Deletes the original queued files
+ *
+ * @param files - Files from the queue which are compatible with {@link LibraryFileInput} requirement.
+ */
+const moveQueuedFilesToLibrary = async (files: CommittableQueuedFile[]) => {
+	const folderLabels = await database.keywords.getFolderLabels(
+		files.flatMap(({ keywordIds }) => keywordIds)
 	);
+	const remappedFilePaths = remapFilePaths(files, LIBRARY_ROOT_DIR, folderLabels);
 
-	await db.transaction(async (tx) => {
-		await Promise.all([
-			// Update file metadata
-			...fileChanges.map(async (file) =>
-				tx.update(queuedFilesTable).set(file).where(eq(queuedFilesTable.id, file.id))
-			),
-			// Delete mappings for keywords removed by the user
-			...fileChanges.map(async (file) =>
-				tx
-					.delete(queuedFilesToKeywordsTable)
-					.where(
-						and(
-							eq(queuedFilesToKeywordsTable.fileId, file.id),
-							not(inArray(queuedFilesToKeywordsTable.keywordId, file.keywordIds))
-						)
-					)
-			),
-			// Add new keywords, if any
-			fileKeywordPairs.length &&
-				tx.insert(queuedFilesToKeywordsTable).values(fileKeywordPairs).onConflictDoNothing()
-		]);
+	await copyFilesToDestination(remappedFilePaths);
+
+	// Prepare database entries for new library files
+	const newLibraryFiles: LibraryFileInput[] = files.map((file) => {
+		let newFilePath = remappedFilePaths.find((remap) => remap.fileId === file.id)
+			?.destinationPath as string;
+		const newFileName = path.basename(newFilePath);
+		newFilePath = path.relative(LIBRARY_ROOT_DIR, path.dirname(newFilePath));
+
+		return {
+			name: newFileName,
+			path: newFilePath,
+			mimeType: file.mimeType,
+			captureDateTime: file.captureDateTime,
+			timezone: file.timezone,
+			keywords: file.keywords,
+			title: file.title,
+			latitude: file.latitude,
+			longitude: file.longitude,
+			altitude: file.altitude
+		};
 	});
+	await database.libraryFiles.add(newLibraryFiles);
+
+	await deleteQueuedFiles(remappedFilePaths.map(({ fileId }) => fileId));
 };
 
 /* SECTION: Page load handler */
 
-export const load: PageServerLoad = async (): Promise<IndexPageResponse> => {
-	const keywordCtx = await db
-		.select({
-			id: keywordsTable.id,
-			name: keywordsTable.keyword,
-			category: keywordsTable.category,
-			city: citiesTable.name,
-			state: statesTable.name,
-			country: countriesTable.name,
-			latitude: locationsTable.latitude,
-			longitude: locationsTable.longitude,
-			altitude: locationsTable.altitude
-		})
-		.from(keywordsTable)
-		.leftJoin(locationsTable, eq(keywordsTable.locationId, locationsTable.id))
-		.leftJoin(citiesTable, eq(locationsTable.cityId, citiesTable.id))
-		.leftJoin(statesTable, eq(locationsTable.stateId, statesTable.id))
-		.leftJoin(countriesTable, eq(locationsTable.countryId, countriesTable.id));
+export const load: PageServerLoad = async (): Promise<{
+	keywordCtx: KeywordData[];
+	queuedFiles: QueuedFileData[];
+}> => {
+	const keywordCtx = await database.keywords.get();
 
-	const queuedFileRows = await db
-		.select({
-			id: queuedFilesTable.id,
-			name: queuedFilesTable.name,
-			path: queuedFilesTable.thumbnailPath,
-			captureDateTime: queuedFilesTable.captureDateTime,
-			timezone: queuedFilesTable.timezone,
-			title: queuedFilesTable.title,
-			latitude: queuedFilesTable.latitude,
-			longitude: queuedFilesTable.longitude,
-			altitude: queuedFilesTable.altitude,
-			keywordIds: sql`array_agg(${queuedFilesToKeywordsTable.keywordId} ORDER BY ${keywordsTable.category}, ${keywordsTable.keyword})`
-		})
-		.from(queuedFilesTable)
-		.leftJoin(
-			queuedFilesToKeywordsTable,
-			eq(queuedFilesTable.id, queuedFilesToKeywordsTable.fileId)
-		)
-		.leftJoin(keywordsTable, eq(queuedFilesToKeywordsTable.keywordId, keywordsTable.id))
-		.groupBy(queuedFilesTable.id)
-		.orderBy(queuedFilesTable.captureDateTime);
+	const queuedFiles = await database.queuedFiles.get();
 
-	const queuedFilesData: QueuedFileData[] = queuedFileRows.map(
-		({ path: filePath, captureDateTime, timezone, keywordIds, ...rest }) => {
-			let captureDate: string | null = null;
-			let captureTime: string | null = null;
-
-			if (captureDateTime) {
-				const parsedDateTime = timezone
-					? DateTime.fromJSDate(captureDateTime).setZone(timezone)
-					: DateTime.fromJSDate(captureDateTime);
-				captureDate = parsedDateTime.toFormat('yyyy-MM-dd');
-				captureTime = parsedDateTime.toFormat('HH:mm:ss');
-			}
-
-			return {
-				path: path.relative(process.cwd(), filePath),
-				keywordIds: (keywordIds as (number | null)[]).filter((id: number | null) => id !== null),
-				captureDate,
-				captureTime,
-				timezone,
-				...rest
-			};
-		}
-	);
-
-	return { keywordCtx, queuedFilesData };
+	return { keywordCtx, queuedFiles };
 };
 
 /* SECTION: Action handlers */
@@ -264,9 +386,13 @@ export const actions: Actions = {
 			const uploadedFiles = formData.getAll('uploadedFiles');
 			console.debug('[index.server.ts:actions.uploadFiles] uploaded files:', uploadedFiles);
 			const parsedFiles = UploadedFileListSchema.parse(uploadedFiles);
+			console.info(`[index.server.ts:actions.uploadFiles] ${parsedFiles.length} files uploaded`);
 			// Process each file asynchronously
-			await Promise.all(parsedFiles.map(processIndividualUploadedFile));
-			return { success: true };
+			const status = await Promise.all(parsedFiles.map(processUploadedFile));
+
+			return {
+				messages: [`${status.filter((status) => status).length} file(s) uploaded successfully.`]
+			};
 		} catch (error) {
 			if (error instanceof ZodError) {
 				// File validation failed
@@ -280,22 +406,33 @@ export const actions: Actions = {
 			});
 		}
 	},
+
 	// Modify files on the server
 	modifyFiles: async ({ request }) => {
 		try {
 			const formData = await request.formData();
 			const fileChanges = JSON.parse(formData.getAll('fileChanges').toString());
 			const deletedFiles = JSON.parse(formData.getAll('deletedFiles').toString());
-			const parsedFileChanges = await ModifiedFileListSchema.parseAsync(fileChanges);
+			const parsedFileChanges = await QueuedFileUpdateListSchema.parseAsync(fileChanges);
 			const parsedDeletedFiles = await DeletedFileListSchema.parseAsync(deletedFiles);
 
 			console.debug('[index.server.ts:actions.modifyFiles] file changes:', parsedFileChanges);
 			console.debug('[index.server.ts:actions.modifyFiles] deleted files:', parsedDeletedFiles);
 
-			const isDeletionSuccessful = await deleteQueuedFiles(parsedDeletedFiles);
-			await updateFilesData(parsedFileChanges);
+			if (!(await deleteQueuedFiles(parsedDeletedFiles))) {
+				return fail(500, {
+					errors: ['File deletion was unsuccessful.']
+				});
+			}
 
-			if (!isDeletionSuccessful) throw new Error('Unable to delete files.');
+			await database.queuedFiles.update(parsedFileChanges);
+
+			return {
+				messages: [
+					`${parsedFileChanges.length} file(s) modified.`,
+					`${parsedDeletedFiles.length} file(s) removed.`
+				]
+			};
 		} catch (error) {
 			if (error instanceof ZodError) {
 				const errors = error.issues.map((issue) => issue.message);
@@ -308,47 +445,48 @@ export const actions: Actions = {
 			});
 		}
 	},
+
 	// Save changes and move files to the library
 	commitFiles: async ({ request }) => {
 		try {
 			const formData = await request.formData();
 			const fileChanges = JSON.parse(formData.getAll('fileChanges').toString());
 			const deletedFiles = JSON.parse(formData.getAll('deletedFiles').toString());
-			const parsedFileChanges = await CommittedFileListSchema.parseAsync(fileChanges);
+			const parsedFileChanges = await CommittableQueuedFileListSchema.parseAsync(fileChanges);
 			const parsedDeletedFiles = await DeletedFileListSchema.parseAsync(deletedFiles);
 
 			console.debug('[index.server.ts:actions.commitFiles] file changes:', parsedFileChanges);
 			console.debug('[index.server.ts:actions.commitFiles] deleted files:', parsedDeletedFiles);
 
-			await deleteQueuedFiles(parsedDeletedFiles);
-			await updateFilesData(parsedFileChanges);
+			if (!(await deleteQueuedFiles(parsedDeletedFiles))) {
+				return fail(500, {
+					errors: ['File deletion was unsuccessful.']
+				});
+			}
+
+			// After applying changes, queued files will be compatible with the library file format
+			await database.queuedFiles.update(parsedFileChanges);
+			const committableFiles = (await database.queuedFiles.get()) as CommittableQueuedFile[];
+			console.debug(
+				'[index.server.ts:actions.commitFiles] queued file ready to commit:',
+				committableFiles
+			);
 
 			// Apply Exif data to the queued files
-			const queuedFileData: ExifWriteableDataSimplified[] = (await db
-				.select({
-					path: queuedFilesTable.path,
-					mimeType: queuedFilesTable.mimeType,
-					captureDateTime: queuedFilesTable.captureDateTime,
-					timezone: queuedFilesTable.timezone,
-					title: queuedFilesTable.title,
-					latitude: queuedFilesTable.latitude,
-					longitude: queuedFilesTable.longitude,
-					altitude: queuedFilesTable.altitude,
-					keywords: sql`array_agg(${keywordsTable.keyword})`
-				})
-				.from(queuedFilesTable)
-				.leftJoin(
-					queuedFilesToKeywordsTable,
-					eq(queuedFilesTable.id, queuedFilesToKeywordsTable.fileId)
-				)
-				.leftJoin(keywordsTable, eq(queuedFilesToKeywordsTable.keywordId, keywordsTable.id))
-				.groupBy(queuedFilesTable.id)) as ExifWriteableDataSimplified[];
-			console.debug('[index.server.ts:actions.commitFiles] queued file data:', queuedFileData);
-			if (!(await writeSimplifiedExifProps(queuedFileData)))
-				throw new Error('Failed to write Exif data to file(s)');
+			if (!(await applyExifMetadata(committableFiles))) {
+				return fail(500, {
+					errors: ['Failed to write Exif data to file(s)']
+				});
+			}
 
-			await moveQueuedFilesToLibrary();
-			return { success: true };
+			await moveQueuedFilesToLibrary(committableFiles);
+
+			return {
+				messages: [
+					`Successfully moved ${committableFiles.length} file(s) to library.`,
+					`${parsedDeletedFiles.length} file(s) removed.`
+				]
+			};
 		} catch (error) {
 			if (error instanceof ZodError) {
 				const errors = error.issues.map((issue) => issue.message);

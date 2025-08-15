@@ -1,0 +1,13 @@
+{
+    "depcheck": {
+        "ignoreMatches": [
+            "npm-check",
+            "@iconify/json",
+            "tailwindcss",
+            "@tailwindcss/forms",
+            "@tailwindcss/typography",
+            "prettier-plugin-svelte",
+            "prettier-plugin-tailwindcss"
+        ]
+    }
+}

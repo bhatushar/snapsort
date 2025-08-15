@@ -1,7 +1,7 @@
 import type { PageServerLoad } from './$types';
-import { getLibraryFiles } from '$lib/server/db';
+import { database } from '$lib/server/db';
 
 export const load: PageServerLoad = async () => {
-	const libraryFiles = await getLibraryFiles();
+	const libraryFiles = await database.libraryFiles.get();
 	return { libraryFiles };
 };

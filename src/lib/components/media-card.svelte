@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { KeywordData, QueuedFileData } from '$lib/types';
+	import type { KeywordData } from '$lib/types';
 	import SearchSelect from '$lib/components/search-select.svelte';
 	import ianaTz from '$lib/iana-tz.json';
 	import { getContext } from 'svelte';
@@ -11,7 +11,18 @@
 	import IconAlarmOutline from '~icons/material-symbols/alarm-outline';
 	import IconClose from '~icons/material-symbols/close';
 
-	export type MediaCardProps = QueuedFileData & {
+	export type MediaCardProps = {
+		id: number;
+		name: string;
+		thumbnailPath: string;
+		captureDate: string | null;
+		captureTime: string | null;
+		timezone: string;
+		title: string | null;
+		latitude: number | null;
+		longitude: number | null;
+		altitude: number | null;
+		keywordIds: number[];
 		markedForDeletion: boolean;
 		isSelected: boolean;
 	};
@@ -19,7 +30,7 @@
 	let {
 		id,
 		name,
-		path,
+		thumbnailPath,
 		captureDate = $bindable(),
 		captureTime = $bindable(),
 		timezone = $bindable(),
@@ -34,7 +45,7 @@
 
 	const keywordCtx = getContext<KeywordData[]>('keyword-ctx');
 	// All keyword data specific to this file
-	let keywords = $derived(keywordCtx.filter((kw) => keywordIds.includes(kw.id)));
+	let keywords = $derived(keywordCtx.filter((kw) => keywordIds.includes(kw.keywordId)));
 	let keywordSelectorValue = $state('');
 </script>
 
@@ -44,7 +55,7 @@
 		class="relative h-96 bg-slate-200 transition-colors hover:bg-slate-300 active:bg-slate-400"
 	>
 		<label for="{id}_select" class="cursor-pointer">
-			<img src={path} alt="Load fail" class="mx-auto h-full object-contain" />
+			<img src={thumbnailPath} alt="Load fail" class="mx-auto h-full object-contain" />
 		</label>
 		<!-- Checkbox -->
 		<input
@@ -177,17 +188,17 @@
 				bind:value={keywordSelectorValue}
 				dataList={keywordCtx}
 				dataToDropdownMapping={(keywordData: KeywordData) => ({
-					value: keywordData.name, // Using name instead of id to display the proper value
-					label: `${keywordData.name} / ${keywordData.category}`
+					value: keywordData.keyword, // Using name instead of id to display the proper value
+					label: `${keywordData.keyword} / ${keywordData.category}`
 				})}
 				dataFilter={(keywordData: KeywordData) =>
-					keywordData.name.toLowerCase().includes(keywordSelectorValue.toLowerCase()) ||
+					keywordData.keyword.toLowerCase().includes(keywordSelectorValue.toLowerCase()) ||
 					keywordData.category.toLowerCase().includes(keywordSelectorValue.toLowerCase())}
 				onSelect={() => {
 					// Add the selected keyword's ID to the list if it doesn't exist yet
-					const keywordData = keywordCtx.find((kw) => kw.name === keywordSelectorValue);
+					const keywordData = keywordCtx.find((kw) => kw.keyword === keywordSelectorValue);
 					if (keywordData) {
-						if (!keywordIds.includes(keywordData.id)) keywordIds.push(keywordData.id);
+						if (!keywordIds.includes(keywordData.keywordId)) keywordIds.push(keywordData.keywordId);
 						// Update missing GPS data if the keyword is a location
 						if (keywordData.category === 'Location') {
 							if (keywordData.latitude && !latitude) latitude = keywordData.latitude;
@@ -203,11 +214,11 @@
 
 		<!-- Keyword list -->
 		<div class="mt-2 flex flex-wrap gap-2">
-			{#each keywords as keyword (keyword.id)}
+			{#each keywords as keyword (keyword.keywordId)}
 				<span class="bg-black py-1 pl-3 text-sm text-white">
-					{keyword.name} |<button
+					{keyword.keyword} |<button
 						class="h-full cursor-pointer pr-3 text-xs font-semibold"
-						onclick={() => (keywordIds = keywordIds.filter((id) => id !== keyword.id))}
+						onclick={() => (keywordIds = keywordIds.filter((id) => id !== keyword.keywordId))}
 						>&nbsp;X</button
 					>
 				</span>

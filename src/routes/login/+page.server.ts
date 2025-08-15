@@ -1,18 +1,14 @@
 import type { PageServerLoad } from '../$types';
-import { getLoginPassword, setLoginPassword } from '$lib/server/db';
+import { database } from '$lib/server/db';
 import { type Actions, fail } from '@sveltejs/kit';
-import { z, ZodError } from 'zod';
+import { ZodError } from 'zod';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { env } from '$env/dynamic/private';
-
-/**
- * Schema for password validation.
- */
-const PasswordSchema = z.string().min(8, 'Password must be at least 8 characters long.');
+import { PasswordSchema } from '$lib/server/validation-schema';
 
 export const load: PageServerLoad = async (): Promise<{ passwordRegistered: boolean }> => {
-	const passwordRegistered = (await getLoginPassword()) !== undefined;
+	const passwordRegistered = (await database.auth.getLoginPassword()) !== undefined;
 	return { passwordRegistered };
 };
 
@@ -20,7 +16,7 @@ export const actions: Actions = {
 	// Create a new login password
 	registerPassword: async ({ request, cookies }) => {
 		try {
-			const currentPassword = await getLoginPassword();
+			const currentPassword = await database.auth.getLoginPassword();
 			if (currentPassword)
 				fail(400, { errors: ['Password is already registered. Cannot create new one.'] });
 
@@ -30,7 +26,7 @@ export const actions: Actions = {
 			// Store new password
 			const saltRounds = 10;
 			const passwordHash = await bcrypt.hash(password, saltRounds);
-			await setLoginPassword(passwordHash);
+			await database.auth.setLoginPassword(passwordHash);
 
 			// JWT token for authorization
 			const token = jwt.sign({ id: 'admin' }, env.JWT_SECRET_KEY as string);
@@ -61,9 +57,7 @@ export const actions: Actions = {
 		try {
 			const formData = await request.formData();
 			const password = PasswordSchema.parse(formData.get('password'));
-			const passwordHash = await getLoginPassword();
-
-			console.debug(`[login.server.ts:actions.login] password: ${password} hash: ${passwordHash}`);
+			const passwordHash = await database.auth.getLoginPassword();
 
 			if (!passwordHash)
 				return fail(400, {
@@ -83,8 +77,6 @@ export const actions: Actions = {
 			} else {
 				return fail(400, { errors: ['Incorrect password.'] });
 			}
-
-			return { success: true };
 		} catch (error) {
 			if (error instanceof ZodError) {
 				// Password didn't meet minimum criteria
